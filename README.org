@@ -1,0 +1,200 @@
+=subed-record= makes it easier to prepare text for subtitles, record a
+voiceover, and then compile a video that includes the visuals, audio,
+and subtitles specified by the text file.
+
+* Prerequisites
+
+You will need:
+
+- [[https://github.com/rndusr/subed][subed]] is a mode for editing subtitles. It is not yet available as a
+  package, but can get it from https://github.com/rndusr/subed .
+
+- [[https://github.com/kljohann/mpv.el][mpv.el]] plays media files from within Emacs using the MPV
+  command-line tool. mpv.el is available from MELPA, and MPV is
+  available via either your operating system's package manager or from
+  https://mpv.io/ .
+
+- [[https://github.com/sachac/subed-waveform][subed-waveform]] is optional. You can use it to display the waveform
+  for the current subtitle to help you fine-tune timestamps.
+  
+* Process
+
+** Set things up
+
+Take a look at the variables in =M-x customize-group subed-record=.
+
+** Draft the text and collect the visuals
+
+You can draft your text in an Org Mode file, using =file:= links to
+include images or videos and =#+CAPTION:= to include captions. You may
+want to wrap your lines to be as short as they will be in captions.
+
+Image and video information should be one per line. Here's an example:
+
+#+begin_src org
+#+CAPTION: Emacs News Highlights - emacsconf.org/2021/talks/news
+[[file:images/Screenshot_20211021_002952.png]]
+I'm Sacha Chua, and here are
+ten Emacs News highlights for 2021.
+If you want to follow the links,
+check out the wiki page at
+https://emacsconf.org/2021/talks/news/ .
+#+end_src
+
+** Create the subtitle file.
+
+Create a subtitle file (ex: recording.vtt) with the
+segments you would like to record in one go.
+
+#+begin_example
+WEBVTT
+
+00:00:00.000 --> 00:00:00.000
+#+CAPTION: Emacs News Highlights - emacsconf.org/2021/talks/news
+[[file:images/Screenshot_20211021_002952.png]]
+I'm Sacha Chua, and here are
+ten Emacs News highlights for 2021.
+
+00:00:00.000 --> 00:00:00.000
+If you want to follow the links,
+check out the wiki page at
+https://emacsconf.org/2021/talks/news/ .
+#+end_example
+
+If you're starting with an Org Mode file, you can use
+=subed-record-org-to-vtt= to extract the text from the current Org
+subtree. It will keep captions and file links, and it will turn HTTP
+links into regular text. It creates a file based on the current
+filename, but with a =.vtt= extension.
+** Record the voiceover
+*** Option A: Record the voiceover using Emacs
+
+Pick an appropriate =subed-record-backend=, such ='sox= if you have
+the command-line =sox= and =rec= tools.
+
+Use =subed-record= to start the recording. It will save the recording
+into a file based on the name of the current subtitle file, but ending
+with =subed-record-extension=.
+
+Default keybindings:
+
+| right    | accept current segment and continue |
+| left     | retry current segment               |
+| up       | go back one segment                 |
+| down     | go forward one segment              |
+| RET or q | stop recording                      |
+
+=subed-record= overwrites the recording file each time it is called.
+If you want to re-record a different segment and splice it into the
+rest of your presentation, you can create a new =.vtt= file and use
+=subed-record= to record into a different audio file. Then you can
+include that segment in your original =.vtt= file with an =#+AUDIO:
+...= specification, like this:
+
+#+begin_example
+00:00:45.864 --> 00:00:47.644
+in his update, so check out his talk.
+
+00:00:00.970 --> 00:00:02.840
+#+AUDIO: native.ogg
+#+CAPTION: emacsconf.org/2021/talks/native/
+[[file:images/native-comp.png]]
+Andrea Corallo's giving a talk
+
+00:00:02.840 --> 00:00:04.475
+#+AUDIO: native.ogg
+on native compilation too.
+#+end_example
+
+NOTE: subed.el automatically sorts subtitles by timestamp. If you move
+subtitles around or use this technique to combine different audio files,
+you may need to disable automatic subed sorting with something like the following code:
+
+#+begin_src emacs-lisp
+(with-eval-after-load 'subed
+  (add-hook 'subed-mode-hook
+            (lambda ()
+              (remove-hook 'before-save-hook #'subed-sort t))))
+#+end_src
+
+*** Option B: Record the audio and edit it using your favourite tool, then create subtitles
+
+Alternatively, you can start with an already-edited audio file and
+then use =subed-mode='s commands to create, split, or adjust subtitles
+so that they match your audio file.
+
+** Split the subtitles into shorter captions
+
+Load the recording with =C-c C-v= (=subed-mpv-find-video=). You may
+want to turn off looping with =C-c C-l=
+(=subed-toggle-loop-over-current-subtitle=).
+
+You can then use the following keyboard shortcuts to divide the
+subtitles into shorter captions if needed.
+
+| =M-j=   | =subed-mpv-jump-to-current-subtitle= |
+| =M-SPC= | =subed-mpv-toggle-pause=             |
+| =M-.=   | =subed-split-subtitle=               |
+
+** Fine-tune the starting and ending timestamps
+
+You can adjust the timestamps by manually typing in new values or by
+using the following keyboard shortcuts:
+
+| =M-[= | =subed-decrease-start-time= |
+| =M-]= | =subed-increase-start-time= |
+| =M-{= | =subed-decrease-stop-time=  |
+| =M-}= | subed-increase-stop-time=   |
+
+It can be easier to determine the starting and stopping timestamps
+from the waveform instead of trying to pause at the right
+moment. [[https://github.com/sachac/subed-waveform][subed-waveform]] allows you to see the waveform for the current
+subtitle, play samples at different positions, and set the start or
+stop times.
+
+** Test the flow of different segments
+
+To test whether the audio flows together, mark a region and use
+=M-x subed-record-compile-try-flow=. You may want to bind this to a
+convenient shortcut with something like the following:
+
+#+begin_src emacs-lisp
+(with-eval-after-load 'subed-record
+  (define-key subed-mode-map
+    (kbd "C-c C-c") 
+    #'subed-record-compile-try-flow))
+#+end_src
+
+This exports the audio segments in the region to a new file specified
+by =subed-record-compile-output-filename= (default: =output.webm=),
+overwriting existing files. After processing, it will play it in a
+separate MPV process. You can stop playing with =M-x mpv-kill=.
+
+** Test the visuals
+
+You can test the visuals as well.  =M-x
+subed-record-compile-test-visuals= compiles all the images, animated
+GIFs, and videos from the subtitle file into the output file specified
+by =subed-record-compile-output-filename= (default: =output.webm=)
+with a duration of 1 second per visual.
+
+To tweak the display, consider customizing the following variables:
+
+- =subed-record-compile-description-height=
+- =subed-record-compile-caption-height=
+- =subed-record-compile-output-video-width=
+- =subed-record-compile-output-video-height=
+- =subed-record-compile-description-drawtext-filter-params=
+  
+** Compile the video
+
+Clear the region or select the whole buffer, then run =M-x
+subed-record-compile-video=.  This will compile the video, audio, and
+subtitles into the output file specified by
+=subed-record-compile-output-filename= (default: =output.webm=).
+
+Audio segments will be concatenated, one after the other. Visuals
+(specified by file: links) will be stretched or squeezed to fit the
+time until the next visual is specified. Visual information will be
+removed from the subtitles, and the resulting subtitles will accompany
+the audio segments.
