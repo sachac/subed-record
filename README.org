@@ -2,6 +2,10 @@
 voiceover, and then compile a video that includes the visuals, audio,
 and subtitles specified by the text file.
 
+I'm not sure it works for anyone but me at the moment, so if you run
+into a problem, it's probably not you, it's me. Let me know and/or
+help me figure it out! =)
+
 Sacha Chua - [[mailto:sacha@sachachua.com][sacha@sachachua.com]] - https://github.com/sachac/subed-record
 
 * Prerequisites
