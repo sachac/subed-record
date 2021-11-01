@@ -47,6 +47,12 @@ check out the wiki page at
 https://emacsconf.org/2021/talks/news/ .
 #+end_src
 
+- *What if I want to include a section of a video or crop an image?* 
+  - The current code doesn't let you specify FFMPEG filters for a
+    specific visual yet, but that'd be a neat addition. In the
+    meantime, you can use your favourite editing tool to put the
+    segment that you want into a file that can be included.
+
 ** Create the subtitle file.
 
 Create a subtitle file (ex: recording.vtt) with the
