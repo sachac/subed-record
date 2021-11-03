@@ -96,6 +96,12 @@ Use 'arecord -l' at the command line to find out what device to use."
 ;;; Recording
 
 ;;;###autoload
+(defun subed-record ()
+  "Turn on subed-record-minor-mode."
+  (interactive)
+  (subed-record-minor-mode 1))
+
+;;;###autoload
 (define-minor-mode subed-record-minor-mode
   "Minor mode for recording segments using the subtitles in the buffer."
   :lighter " REC"
