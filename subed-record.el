@@ -317,7 +317,9 @@ modified plist."
   (seq-let (start-ms end-ms caption description) o
     (format "scale=%d:%d:force_original_aspect_ratio=decrease,setsar=sar=1,pad=%d:%d:(ow-iw)/2:%d+(oh-%d-%d-ih)/2"
             subed-record-compile-output-video-width
-            (- subed-record-compile-output-video-height (or subed-record-compile-caption-height 0) (or subed-record-compile-description-height 0))
+            (- subed-record-compile-output-video-height
+               (or subed-record-compile-caption-height 0)
+               (or subed-record-compile-description-height 0))
             subed-record-compile-output-video-width
             subed-record-compile-output-video-height
             (or subed-record-compile-description-height 0)
@@ -387,7 +389,7 @@ modified plist."
                     (visual-file (plist-get o :visual-file))
                     (visual-duration (plist-get o :visual-duration))
                     (description-filter (subed-record-compile-ffmpeg-make-description-filter visual-description))
-                    (scale (subed-record-compile-segment-scale-filter o)))
+                    (scale (subed-record-compile-scale-filter o)))
                (funcall 
                 (cond
                  ((string-match "mp4" visual-file) 'subed-record-compile-ffmpeg-prepare-video)
