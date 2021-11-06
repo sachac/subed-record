@@ -232,7 +232,7 @@ files are overwritten."
 (defcustom subed-record-compile-description-height 50 "Number of pixels for top description in video.
 If nil, omit the description."
   :type 'integer :group 'subed-record)
-(defcustom subed-record-compile-caption-height 75 "Number of pixels to leave at the bottom for captions in video.
+(defcustom subed-record-compile-caption-height nil "Number of pixels to leave at the bottom for captions in video.
 If nil, do not leave space for captions."
   :type 'integer :group 'subed-record)
 (defcustom subed-record-compile-output-video-width 1280 "Video will be the specified number of pixels wide."
@@ -511,7 +511,7 @@ INCLUDE should be a list of the form '(video audio subtitles)."
           (when (member 'subtitles include)
             (make-temp-file
              (file-name-sans-extension (buffer-file-name)) nil ".vtt"
-             (insert (subed-record-compile-format-as-vtt selection)))))
+             (subed-record-compile-format-as-vtt selection))))
          (visual-args
           (when (member 'video include)
             (subed-record-compile-format-selection-as-visuals selection)))
