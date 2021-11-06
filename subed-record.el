@@ -320,9 +320,9 @@ modified plist."
             (- subed-record-compile-output-video-height (or subed-record-compile-caption-height 0) (or subed-record-compile-description-height 0))
             subed-record-compile-output-video-width
             subed-record-compile-output-video-height
-            subed-record-compile-description-height
-            subed-record-compile-description-height
-            subed-record-compile-caption-height)))
+            (or subed-record-compile-description-height 0)
+            (or subed-record-compile-description-height 0)
+            (or subed-record-compile-caption-height 0))))
 
 (defun subed-record-compile-ffmpeg-make-description-filter (description)
   "Return the FFMPEG filter needed to add DESCRIPTION as text."
