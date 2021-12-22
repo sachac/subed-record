@@ -31,6 +31,8 @@
 ;; 
 ;; For more information, see README.org.
 
+(require 'compile-media)
+
 ;;; Code:
 
 (defgroup subed-record nil
@@ -229,21 +231,12 @@ files are overwritten."
 
 ;;; Compiling
 
-(defcustom subed-record-compile-description-height 50 "Number of pixels for top description in video.
-If nil, omit the description."
-  :type 'integer :group 'subed-record)
 (defcustom subed-record-compile-caption-height nil "Number of pixels to leave at the bottom for captions in video.
 If nil, do not leave space for captions."
   :type 'integer :group 'subed-record)
-(defcustom subed-record-compile-output-video-width 1280 "Video will be the specified number of pixels wide."
-  :type 'integer :group 'subed-record)
-(defcustom subed-record-compile-output-video-height 720 "Video will be the specified number of pixels tall."
-  :type 'integer :group 'subed-record)
 (defcustom subed-record-compile-output-filename "output.webm" "Output filename."
   :type 'file :group 'subed-record)
-(defcustom subed-record-compile-description-drawtext-filter-params "fontcolor=white:x=5:y=5:fontsize=40"
-  "Additional filter arguments for drawing the visual description."
-  :type 'string :group 'subed-record)
+
 
 (defcustom subed-record-compile-info-functions '(subed-record-compile-get-subtitle-info
                                                  subed-record-compile-get-visuals-from-org
@@ -284,185 +277,77 @@ modified plist."
     (setq info (plist-put info :caption caption))
     (setq info (plist-put info :audio-file audio-file))))
 
-(defun subed-record-compile-get-selection-for-region (beg end)
-  (interactive "r")
-  (goto-char beg)
+(defun subed-record-compile-get-base-selection (beg end)
+  "Return entries for each caption."
   (let (result)
     (subed-for-each-subtitle beg end nil
-      (setq result
-            (cons
-             (seq-reduce
-              (lambda (val f) (funcall f val))
-              subed-record-compile-info-functions
-              nil)
-             result)))
+           (setq result
+                 (cons
+                  (seq-reduce
+                   (lambda (val f) (funcall f val))
+                   subed-record-compile-info-functions
+                   nil)
+                  result)))
     (reverse result)))
 
-(defun subed-record-compile-get-duration-ms (filename)
-  (* 1000
-     (string-to-number
-      (shell-command-to-string
-       (concat "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "
-               (shell-quote-argument (expand-file-name filename)))))))
+(defun subed-record-compile--format-subtitles (list)
+  "Make a temporary file containing the captions from LIST, set one after the other."
+  (when list
+    (let ((subtitle-file (concat (make-temp-name "/tmp/captions") ".vtt")))
+      (with-temp-file subtitle-file
+        (subed-vtt--init)
+        (let ((msecs 0))
+          (mapc (lambda (info)
+                  (subed-append-subtitle nil
+                                         msecs
+                                         (+ msecs (- (plist-get info :stop-ms)
+                                                     (plist-get info :start-ms)
+                                                     1))
+                                         (plist-get info :caption))
+                  (setq msecs (+ msecs (- (plist-get info :stop-ms)
+                                          (plist-get info :start-ms)))))
+                list)))
+      subtitle-file)))
 
-(defun subed-record-compile-get-frames (filename)
-  "Return the number of frames for an animated GIF at FILENAME."
-  (string-to-number
-   (shell-command-to-string
-    (concat "ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets -of csv=p=0 "
-            (shell-quote-argument (expand-file-name filename))))))
+(defun subed-record-compile--format-tracks (list)
+  "Prepare LIST for use in `compile-media.'"
+  `((video ,@(subed-record-compile--selection-visuals list))
+    (audio ,@(subed-record-compile--selection-audio list))
+    (subtitles (:source ,(subed-record-compile--format-subtitles list) :temporary t))))
 
-(defun subed-record-compile-scale-filter (o)
-  "Return the complex filter for scaling O."
-  (seq-let (start-ms end-ms caption description) o
-    (format "scale=%d:%d:force_original_aspect_ratio=decrease,setsar=sar=1,pad=%d:%d:(ow-iw)/2:%d+(oh-%d-%d-ih)/2"
-            subed-record-compile-output-video-width
-            (- subed-record-compile-output-video-height
-               (or subed-record-compile-caption-height 0)
-               (or subed-record-compile-description-height 0))
-            subed-record-compile-output-video-width
-            subed-record-compile-output-video-height
-            (or subed-record-compile-description-height 0)
-            (or subed-record-compile-description-height 0)
-            (or subed-record-compile-caption-height 0))))
+(defun subed-record-compile-get-selection-for-region (beg end)
+  "Return a `compile-media'-formatted set of tracks for the region."
+  (interactive "r")
+  (subed-record-compile--format-tracks (subed-record-compile-get-base-selection beg end)))
 
-(defun subed-record-compile-ffmpeg-make-description-filter (description)
-  "Return the FFMPEG filter needed to add DESCRIPTION as text."
-  (if description
-      (concat ",drawtext=" subed-record-compile-description-drawtext-filter-params ":text='"
-              description ; TODO quote this properly
-              "'")
-    ""))
-
-(defun subed-record-compile-ffmpeg-prepare-video (visual-file duration scale description-filter i)
-  "Return ffmpeg arguments for videos."
-  (list
-   :input
-   (list "-i" visual-file)
-   :filter
-   (let ((video-duration (subed-record-compile-get-duration-ms visual-file)))
-     (format
-      "[%d:v]setpts=PTS*%.3f,%s%s[r%d];"
-      i
-      (/ duration video-duration)
-      scale
-      description-filter
-      i))))
-
-(defun subed-record-compile-ffmpeg-prepare-animated-gif (visual-file duration scale description-filter i)
-  (let ((gif-frames (subed-record-compile-get-frames visual-file)))
-    (list
-     :input
-     (list "-r" (format "%.3f" (/ gif-frames (/ duration 1000.0))) "-i" visual-file)
-     :filter
-     ;; (format "-i %s" filename)
-     (format "[%d:v]%s%s[r%d];" i scale description-filter i))))
-
-(defun subed-record-compile-ffmpeg-prepare-static-image (visual-file duration scale description-filter i)
-  (list
-   :input
-   (list "-loop" "1" "-t" (format "%.3f" (/ duration 1000.0)) "-i" visual-file)
-   :filter
-   (format "[%d:v]%s%s[r%d];" i scale description-filter i)))
-
-(defun subed-record-compile-selection-visuals (selection)
+(defun subed-record-compile--selection-visuals (selection)
   "Return selection segments containing visuals with adjusted durations."
-  (let (current result)
+  (let (current result start stop)
     (while selection
+      (setq start (plist-get (car selection) :start-ms))
+      (setq stop (plist-get (car selection) :stop-ms))
       (when (plist-get (car selection) :visual-file)
-        (setq current (car selection))
-        (setf current (plist-put current :visual-duration 0))
-        (setq result (cons current result)))
-      (setf current (plist-put current :visual-duration (+ (plist-get current :visual-duration)
-                                                           (- (plist-get (car selection) :stop-ms)
-                                                              (plist-get (car selection) :start-ms)))))
+        (setq current (copy-sequence (car selection)))
+        (setq current (plist-put current :duration 0))
+        (setq current (plist-put current :start-ms nil))
+        (setq current (plist-put current :stop-ms nil))
+        (setq result (cons (append (list :source (expand-file-name (plist-get (car selection) :visual-file)))
+                                   current)
+                           result)))
+      (setf current (plist-put current :duration (+ (plist-get current :duration)
+                                                    (- stop start))))
       (setq selection (cdr selection)))
     (nreverse result)))
 
-(defun subed-record-compile-format-selection-as-visuals (selection)
-  (let* (info filter input visuals)
-    (setq visuals (subed-record-compile-selection-visuals selection))
-    (setq info
-          (seq-map-indexed
-           (lambda (o i)
-             (let* ((visual-description (plist-get o :visual-description))
-                    (visual-file (plist-get o :visual-file))
-                    (visual-duration (plist-get o :visual-duration))
-                    (description-filter (subed-record-compile-ffmpeg-make-description-filter visual-description))
-                    (scale (subed-record-compile-scale-filter o)))
-               (funcall 
-                (cond
-                 ((string-match "mp4" visual-file) 'subed-record-compile-ffmpeg-prepare-video)
-                 ((string-match "gif$" visual-file) 'subed-record-compile-ffmpeg-prepare-animated-gif)
-                 (t 'subed-record-compile-ffmpeg-prepare-static-image))
-                visual-file visual-duration scale description-filter i)))
-           visuals))
-    (setq filter (list
-                  (mapconcat (lambda (o) (plist-get o :filter)) info "")
-                  (mapconcat
-                   (lambda (o) (format "[r%d]" o))
-                   (number-sequence 0 (1- (length visuals)))
-                   "")
-                  (format "concat=n=%d:v=1:a=0[v]" (length visuals))))
-    (setq input (apply 'seq-concatenate 'list (mapcar (lambda (o) (plist-get o :input)) info)))
-    (list :input input :filter (string-join filter "")
-          :output (list "-map" "[v]:v" "-c:v" "vp8" "-vsync" "2" "-b:v" "800k")
-          :input-count (length visuals))))
-
-(defun subed-record-compile-format-selection-as-audio (list &rest args)
-  "LIST is a plist of (:start-ms ... :end-ms ... :audio-file)
-ARGS: :start-input should have the numerical index for the starting input file."
-  (let ((temp list) groups current previous)
-    (while temp
-      (setq current
-            (seq-take-while
-             (lambda (o)
-               (prog1 (or (null previous)
-                          (and 
-                           (string= (plist-get o :audio-file) (plist-get previous :audio-file))
-                           (>= (plist-get o :start-ms) (plist-get previous :stop-ms))))
-                 (setq previous o)))
-             temp))
-      (setq groups (cons
-                    (list
-                     :input (list "-i" (plist-get (car current) :audio-file))
-                     :filter (format "aselect='%s',asetpts='N/SR/TB'"
-                                     (mapconcat
-                                      (lambda (o)
-                                        (format "between(t,%.3f,%.3f)"
-                                                (/ (plist-get o :start-ms) 1000.0)
-                                                (/ (plist-get o :stop-ms) 1000.0)))
-                                      current
-                                      "+")
-                                     ))
-                    groups))
-      (setq temp (seq-drop temp (length current)))
-      (setq previous nil))
-    (setq groups (reverse groups))
-    (list
-     :input
-     (seq-mapcat (lambda (o) (plist-get o :input)) groups)
-     :filter
-     (concat
-      (string-join (seq-map-indexed
-                    (lambda (o i)
-                      (format "[%d]%s[%s]"
-                              (+ (plist-get args :start-input) i)
-                              (plist-get o :filter)
-                              (if (> (length groups) 1)
-                                  (format "a%d" i)
-                                "a")))
-                    groups)
-                   ";")
-      (if (> (length groups) 1)
-          (concat
-           ";"
-           (mapconcat (lambda (sink) (format "[a%d]" sink)) (number-sequence 0 (1- (length groups))) "")
-           (format "concat=n=%d:v=0:a=1[a]" (length groups)))
-        ""))
-     :input-count (length groups)
-     :output
-     (list "-map:a" "[a]" "-acodec" "libvorbis"))))
+(defun subed-record-compile--selection-audio (list)
+  "LIST is a plist of (:start-ms ... :stop-ms ... :audio-file ...).
+Returns an audio track."
+  (delq nil
+        (seq-map (lambda (o)
+                   (when (plist-get o :audio-file)
+                     (append (list :source (expand-file-name (plist-get o :audio-file)))
+                             o)))
+                 list)))
 
 (defun subed-record-compile-audio (&optional beg end &rest args)
   "Compile just the audio."
@@ -481,108 +366,43 @@ ARGS: :start-input should have the numerical index for the starting input file."
        (when (string-match "finished" event)
          (mpv-play subed-record-compile-output-filename))))))
 
-;;https://emacs.stackexchange.com/questions/48256/how-to-have-a-buffer-interpret-c-m-as-an-actual-carriage-return
-(defun subed-record-compile-process-filter-function (proc input-string)
-  "Handle ^M for progress reporting."
-  (let ((proc-buf (process-buffer proc)))
-    (when (buffer-live-p proc-buf)
-      (with-current-buffer proc-buf
-        (let ((inhibit-read-only t))
-          (save-excursion
-            (goto-char (point-max))
-            (if (not (string= "\r" (substring input-string 0 1)))
-                (insert input-string)
-              (delete-region (line-beginning-position) (line-end-position))
-              (insert (substring input-string 1)))))))))
-
 (defun subed-record-compile-video (&optional beg end include &rest args)
   "Create output file with video, audio, and subtitles.
 INCLUDE should be a list of the form '(video audio subtitles)."
   (interactive (list (if (region-active-p) (min (point) (mark)) (point-min))
                      (if (region-active-p) (max (point) (mark)) (point-max))
                      '(video audio subtitles)))
-  (if (string= (expand-file-name
-                (concat (file-name-sans-extension (buffer-file-name))
-                        subed-record-extension))
-               (expand-file-name subed-record-compile-output-filename))
-      (error "Compiling to %s would overwrite the source recording. Please change `subed-record-compile-output-filename'."
-             sube-record-compile-extension))
-  (setq include (or include '(video audio subtitles)))
-  (let* ((selection (subed-record-compile-get-selection-for-region (or beg (point-min)) (or end (point-max))))
-         (subtitle-file
-          (when (member 'subtitles include)
-            (make-temp-file
-             (file-name-sans-extension (buffer-file-name)) nil ".vtt"
-             (subed-record-compile-format-as-vtt selection))))
-         (visual-args
-          (when (member 'video include)
-            (subed-record-compile-format-selection-as-visuals selection)))
-         (audio-args
-          (when (member 'audio include)
-            (subed-record-compile-format-selection-as-audio selection :start-input (or (plist-get visual-args :input-count) 0))))
-         (ffmpeg-args
-          (append
-           (plist-get visual-args :input)
-           (plist-get audio-args :input)
-           (list "-filter_complex" (string-join
-                                    (delq nil
-                                          (list
-                                           (plist-get visual-args :filter)
-                                           (plist-get audio-args :filter)))
-                                    ";"))
-           (when (member 'subtitles include)
-             (list "-i" subtitle-file "-map"
-                   (format "%d:s"
-                           (apply '+
-                                  (delq nil
-                                        (list (plist-get visual-args :input-count)
-                                              (plist-get audio-args :input-count)
-                                              0))))))
-           (plist-get visual-args :output)
-           (plist-get audio-args :output)
-           (list "-y" subed-record-compile-output-filename)
-           nil)))
-    (with-current-buffer (get-buffer-create "*ffmpeg*")
-      (when (process-live-p subed-record-compile-ffmpeg-conversion-process)
-        (quit-process subed-record-compile-ffmpeg-conversion-process))
-      (erase-buffer)
-      (kill-new (concat "ffmpeg " (mapconcat 'shell-quote-argument ffmpeg-args " ")))
-      (insert "ffmpeg " (mapconcat 'shell-quote-argument ffmpeg-args " ") "\n")
-      (setq subed-record-compile-ffmpeg-conversion-process
-            (apply 'start-process "ffmpeg" (current-buffer) subed-record-ffmpeg-executable ffmpeg-args))
-      (set-process-coding-system subed-record-compile-ffmpeg-conversion-process 'utf-8-dos 'utf-8-dos)
-      (set-process-filter subed-record-compile-ffmpeg-conversion-process 'subed-record-compile-process-filter-function)
-      (set-process-sentinel subed-record-compile-ffmpeg-conversion-process
-                            (lambda (process event)
-                              (when (save-match-data (string-match "finished" event))
-                                (when subtitle-file (delete-file subtitle-file)))
-                              (when (plist-get args :sentinel)
-                                (funcall (plist-get args :sentinel) process event))))
-      (display-buffer (current-buffer)))))
+  (let ((output-file (expand-file-name subed-record-compile-output-filename))
+        selection)
+    (if (string= (expand-file-name
+                  (concat (file-name-sans-extension (buffer-file-name))
+                          subed-record-extension))
+                 output-file)
+        (error "Compiling to %s would overwrite the source recording. Please change `subed-record-compile-output-filename'."
+               subed-record-compile-extension))
+    (setq include (or include '(video audio subtitles)))
+    (setq selection
+          (seq-filter
+           (lambda (track) (member (car track) include))
+           (subed-record-compile-get-selection-for-region (or beg (point-min))
+                                                          (or end (point-max)))))
+    (compile-media selection subed-record-compile-output-filename)))
 
 (defun subed-record-compile-test-visuals (&optional limit)
   (interactive "p")
   (let* ((visuals
           (seq-filter (lambda (o) (plist-get o :visual-file))
-                      (subed-record-compile-get-selection-for-region (point-min) (point-max))))
-         (formatted-visuals
-          (subed-record-compile-format-selection-as-visuals
+                      (subed-record-compile-get-base-selection (point-min) (point-max))))
+         (tracks
+          (subed-record-compile--format-tracks
            (seq-map
             (lambda (o)
               (setf o (plist-put o :stop-ms (+ 1000 (plist-get o :start-ms))))
               o)
-            (if (and (numberp limit) (> limit 1)) (seq-take visuals limit) visuals))))
-         (args
-          (append
-           (plist-get formatted-visuals :input)
-           (list "-filter_complex" (plist-get formatted-visuals :filter))
-           (plist-get formatted-visuals :output)
-           (list "-y" "visuals.webm"))))
-    (with-current-buffer (get-buffer-create "*ffmpeg*")
-      (erase-buffer)
-      (insert "ffmpeg " (mapconcat 'shell-quote-argument args " ") "\n")
-      (apply 'call-process subed-record-ffmpeg-executable nil t nil args)
-      (display-buffer (current-buffer)))))
+            (if (and (numberp limit) (> limit 1))
+                (seq-take visuals limit)
+              visuals)))))
+    (compile-media tracks subed-record-compile-output-filename)))
 
 (defun subed-record-compile-format-as-audacity-labels (list)
   "LIST is a list of (start-ms end-ms text)."
@@ -602,9 +422,9 @@ INCLUDE should be a list of the form '(video audio subtitles)."
              (lambda (o)
                (prog1
                    (format "%s --> %s\n%s\n\n"
-                           (my-msecs-to-timestamp ms)
-                           (my-msecs-to-timestamp (+ ms (- (plist-get o :stop-ms)
-                                                           (plist-get o :start-ms))))
+                           (subed-vtt--msecs-to-timestamp ms)
+                           (subed-vtt--msecs-to-timestamp (+ ms (- (plist-get o :stop-ms)
+                                                                   (plist-get o :start-ms))))
                            (replace-regexp-in-string "#\\+.*?\n\\|\\[[file.*?]]\n" ""
                                                      (plist-get o :caption)))
                  (setq ms (+ ms (- (plist-get o :stop-ms)
@@ -617,11 +437,11 @@ INCLUDE should be a list of the form '(video audio subtitles)."
   (with-temp-file (concat
                    (file-name-base (buffer-file-name))
                    ".txt")
-    (insert (my-record-format-as-audacity-labels
+    (insert (subed-record-compile-format-as-audacity-labels
              (with-current-buffer (current-buffer)
                (unless (region-active-p)
                  (setq beg (point-min) end (point-max)))
-               (my-record-get-selection-for-region beg end)))))) 
+               (subed-record-get-selection-for-region beg end)))))) 
 
 
 (provide 'subed-record)
