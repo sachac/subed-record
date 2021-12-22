@@ -20,6 +20,8 @@ You will need:
   available via either your operating system's package manager or from
   https://mpv.io/ .
 
+- [[https://github.com/sachac/compile-media][compile-media]] puts together the video.
+  
 - [[https://github.com/sachac/subed-waveform][subed-waveform]] is optional. You can use it to display the waveform
   for the current subtitle to help you fine-tune timestamps.
   
