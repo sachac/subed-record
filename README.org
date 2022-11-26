@@ -63,9 +63,11 @@ segments you would like to record in one go.
 #+begin_example
 WEBVTT
 
-00:00:00.000 --> 00:00:00.000
+NOTE
 #+CAPTION: Emacs News Highlights - emacsconf.org/2021/talks/news
 [[file:images/Screenshot_20211021_002952.png]]
+
+00:00:00.000 --> 00:00:00.000
 I'm Sacha Chua, and here are
 ten Emacs News highlights for 2021.
 
@@ -109,10 +111,12 @@ include that segment in your original =.vtt= file with an =#+AUDIO:
 00:00:45.864 --> 00:00:47.644
 in his update, so check out his talk.
 
-00:00:00.970 --> 00:00:02.840
+NOTE
 #+AUDIO: native.ogg
 #+CAPTION: emacsconf.org/2021/talks/native/
-[[file:images/native-comp.png]]
+[[
+00:00:00.970 --> 00:00:02.840
+file:images/native-comp.png]]
 Andrea Corallo's giving a talk
 
 00:00:02.840 --> 00:00:04.475
@@ -212,3 +216,48 @@ Audio segments will be concatenated, one after the other. Visuals
 time until the next visual is specified. Visual information will be
 removed from the subtitles, and the resulting subtitles will accompany
 the audio segments.
+* Multiple output files
+
+You can specify multiple output files with the ~#+OUTPUT:~ keyword, like this:
+
+#+begin_example
+WEBVTT
+
+NOTE
+[[file:/home/sacha/proj/emacsconf/assets/in-between/journalism.png]]
+#+OUTPUT: journalism.webm
+
+00:00:04.794 --> 00:00:07.559
+The next talk is called "Emacs journalism
+
+00:00:07.560 --> 00:00:09.879
+(or everything's a nail if you hit it with Emacs)",
+
+00:00:09.880 --> 00:00:10.800
+by Alfred Zanini.
+
+00:00:11.393 --> 00:00:14.026
+They will answer questions via BigBlueButton.
+
+00:00:14.027 --> 00:00:16.744
+You can join using the URL from the talk page
+
+00:00:16.745 --> 00:00:20.394
+or ask questions through Etherpad or IRC.
+
+NOTE
+[[file:/home/sacha/proj/emacsconf/assets/in-between/school.png]]
+#+OUTPUT: school.webm
+
+00:00:27.526 --> 00:00:30.606
+The next talk is called "Back to school with Emacs".
+
+00:00:33.860 --> 00:00:36.251
+Daniel Rosel demonstrates Lectorg,
+
+00:00:36.332 --> 00:00:39.881
+a package that he wrote to make note taking faster and simpler.
+
+00:00:39.882 --> 00:00:44.319
+Afterwards, he will handle questions over IRC.
+#+end_example

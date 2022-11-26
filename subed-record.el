@@ -3,8 +3,7 @@
 ;; Copyright (c) 2021 Sacha Chua
 
 ;; Author: Sacha Chua <sacha@sachachua.com>
-;; Version: 0.1
-;; Package-Requires: ((hydra) (mpv)
+;; Version: 0.2
 ;; 
 ;; This file is not part of GNU Emacs.
 ;;
@@ -238,64 +237,75 @@ If nil, do not leave space for captions."
   :type 'file :group 'subed-record)
 
 
-(defcustom subed-record-compile-info-functions '(subed-record-compile-get-subtitle-info
-                                                 subed-record-compile-get-visuals-from-org
-                                                 subed-record-compile-get-audio-info)
+(defcustom subed-record-compile-info-functions '(subed-record-compile-get-visuals-from-org
+                                                 subed-record-compile-get-audio-info
+                                                 subed-record-compile-get-output-file-from-org)
   "Functions to run to get information for the current segment.
 Functions should accept one argument, the plist, and return the
 modified plist."
   :type '(list function)
   :group 'subed-record)
 
-(defun subed-record-compile-get-subtitle-info (info)
-  "Get information from the current subtitle."
-  (setf info (plist-put info :caption (subed-subtitle-text)))
-  (setf info (plist-put info :start-ms (subed-subtitle-msecs-start)))
-  (setf info (plist-put info :stop-ms (subed-subtitle-msecs-stop)))
+(defun subed-record-compile-get-output-file-from-org (info)
+  (mapc (lambda (field)
+          (let ((val (plist-get info field)))
+            (when val
+              (when (string-match "#\\+OUTPUT: \\(.+?\\)\n" val)
+                (setq info (plist-put info :output (match-string 1 val)))
+                (setq val (replace-match "" nil t val))
+                (setq info (plist-put info field val))))))
+        '(:comment :caption))
   info)
 
 (defun subed-record-compile-get-visuals-from-org (info)
   "Get visual information from Org syntax and store it in INFO."
-  (let ((caption (plist-get info :caption)))
-    (when (string-match "#\\+CAPTION: \\(.+?\\)\n" caption)
-      (setq info (plist-put info :visual-description (match-string 1 caption)))
-      (setq caption (replace-match "" nil t caption)))
-    (when (string-match "\\[\\[file:\\([^]]+?\\)\\].+\n" caption)
-      (setq info (plist-put info :visual-file (match-string 1 caption)))
-      (setq caption (replace-match "" nil t caption)))
-    (setq info (plist-put info :caption caption))
-    info))
+  (mapc (lambda (field)
+          (let ((val (plist-get info field)))
+            (when val
+              (when (string-match "#\\+CAPTION: \\(.+?\\)\n" val)
+                (setq info (plist-put info :visual-description (match-string 1 val)))
+                (setq val (replace-match "" nil t val)))
+              (when (string-match "\\[\\[file:\\([^]]+?\\)\\].+\n" val)
+                (setq info (plist-put info :visual-file (match-string 1 val)))
+                (setq val (replace-match "" nil t val)))
+              (setq info (plist-put info field val)))))
+        '(:comment :caption))
+  info)
 
 (defun subed-record-compile-get-audio-info (info)
   "Get the audio file or current media file."
-  (let ((caption (plist-get info :caption)))
-    (if (string-match "#\\+AUDIO: \\(.+?\\)\n" caption)
-        (progn
-          (setq audio-file (match-string 1 caption))
-          (setq caption (replace-match "" nil t caption)))
-      (setq audio-file subed-mpv-video-file))
-    (setq info (plist-put info :caption caption))
-    (setq info (plist-put info :audio-file audio-file))))
+  (let (audio-file)
+    (mapc (lambda (field)
+            (let ((val (plist-get info field)))
+              (when val
+                (if (string-match "#\\+AUDIO: \\(.+?\\)\n" val)
+                    (progn
+                      (setq audio-file (match-string 1 val))
+                      (setq val (replace-match "" nil t val)))
+                  (setq audio-file subed-mpv-media-file))
+                (setq info (plist-put info field val)))))
+          '(:comment :caption))
+    (plist-put info :audio-file audio-file)
+    info))
 
 (defun subed-record-compile-get-base-selection (beg end)
   "Return entries for each caption."
-  (let (result)
-    (subed-for-each-subtitle beg end nil
-           (setq result
-                 (cons
-                  (seq-reduce
-                   (lambda (val f) (funcall f val))
-                   subed-record-compile-info-functions
-                   nil)
-                  result)))
-    (reverse result)))
+  (mapcar (lambda (sub)
+            (seq-reduce
+             (lambda (val f) (funcall f val))
+             subed-record-compile-info-functions
+             (list :comment (elt sub 4)
+                   :caption (elt sub 3)
+                   :start-ms (elt sub 1)
+                   :stop-ms (elt sub 2))))
+          (subed-subtitle-list beg end)))
 
 (defun subed-record-compile--format-subtitles (list)
   "Make a temporary file containing the captions from LIST, set one after the other."
   (when list
     (let ((subtitle-file (concat (make-temp-name "/tmp/captions") ".vtt")))
       (with-temp-file subtitle-file
-        (subed-vtt--init)
+        (subed-vtt-mode)
         (let ((msecs 0))
           (mapc (lambda (info)
                   (subed-append-subtitle nil
@@ -331,11 +341,12 @@ modified plist."
         (setq current (plist-put current :duration 0))
         (setq current (plist-put current :start-ms nil))
         (setq current (plist-put current :stop-ms nil))
-        (setq result (cons (append (list :source (expand-file-name (plist-get (car selection) :visual-file)))
+        (setq result (cons (append (list :source
+                                         (expand-file-name (plist-get (car selection) :visual-file)))
                                    current)
                            result)))
-      (setf current (plist-put current :duration (+ (plist-get current :duration)
-                                                    (- stop start))))
+      (setf current (plist-put current :duration (+ (or (plist-get current :duration) 0)
+                                                    (- (or stop 0) (or start 0)))))
       (setq selection (cdr selection)))
     (nreverse result)))
 
@@ -366,27 +377,45 @@ Returns an audio track."
        (when (string-match "finished" event)
          (mpv-play subed-record-compile-output-filename))))))
 
-(defun subed-record-compile-video (&optional beg end include &rest args)
+(defun subed-record-compile-group-by-output-file (list)
+  "Return a list of ((output-filename sub sub sub) (output-filename sub sub sub))."
+  (let (result current)
+    ;; default to subed-record-compile-output-filename if not specified
+    (setq current
+          (seq-take-while (lambda (o) (null (plist-get o :output))) list))
+    (when current
+      (setq result (cons subed-record-compile-output-filename current))
+      (setq list (seq-drop list (length current))))
+    (while list
+      (setq current (seq-take-while (lambda (o) (null (plist-get o :output))) (cdr list)))
+      (setq result
+            (cons
+             (cons (plist-get (car list) :output)
+                   (cons (car list)
+                         current))
+             result))
+      (setq list (seq-drop list (1+ (length current)))))
+    (reverse result)))
+
+(defun subed-record-compile-video (&optional beg end include &rest _)
   "Create output file with video, audio, and subtitles.
-INCLUDE should be a list of the form '(video audio subtitles)."
+INCLUDE should be a list of the form (video audio subtitles)."
   (interactive (list (if (region-active-p) (min (point) (mark)) (point-min))
                      (if (region-active-p) (max (point) (mark)) (point-max))
                      '(video audio subtitles)))
-  (let ((output-file (expand-file-name subed-record-compile-output-filename))
-        selection)
-    (if (string= (expand-file-name
-                  (concat (file-name-sans-extension (buffer-file-name))
-                          subed-record-extension))
-                 output-file)
-        (error "Compiling to %s would overwrite the source recording. Please change `subed-record-compile-output-filename'."
-               subed-record-compile-extension))
-    (setq include (or include '(video audio subtitles)))
-    (setq selection
-          (seq-filter
-           (lambda (track) (member (car track) include))
-           (subed-record-compile-get-selection-for-region (or beg (point-min))
-                                                          (or end (point-max)))))
-    (compile-media selection subed-record-compile-output-filename)))
+  (setq include (or include '(video audio subtitles)))
+  (let* ((selection
+          (subed-record-compile-get-base-selection (or beg (point-min))
+                                                   (or end (point-max))))
+         (output-groups (subed-record-compile-group-by-output-file selection)))
+    (mapc
+     (lambda (output-group)
+       (compile-media
+        (seq-filter
+         (lambda (track) (member (car track) include))
+         (subed-record-compile--format-tracks (cdr output-group)))
+        (car output-group)))
+     output-groups)))
 
 (defun subed-record-compile-test-visuals (&optional limit)
   (interactive "p")
