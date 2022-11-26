@@ -125,14 +125,13 @@ on native compilation too.
 #+end_example
 
 NOTE: subed.el automatically sorts subtitles by timestamp. If you move
-subtitles around or use this technique to combine different audio files,
-you may need to disable automatic subed sorting with something like the following code:
+subtitles around or use this technique to combine different audio
+files, you may need to disable automatic subed sorting with something
+like the following code:
 
 #+begin_src emacs-lisp
 (with-eval-after-load 'subed
-  (add-hook 'subed-mode-hook
-            (lambda ()
-              (remove-hook 'before-save-hook #'subed-sort t))))
+  (remove-hook 'subed-sanitize-functions 'subed-sort))
 #+end_src
 
 *** Option B: Record the audio and edit it using your favourite tool, then create subtitles
