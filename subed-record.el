@@ -372,10 +372,7 @@ Returns an audio track."
   (save-excursion
     (subed-record-compile-audio
      beg end
-     :sentinel
-     (lambda (process event)
-       (when (string-match "finished" event)
-         (mpv-play subed-record-compile-output-filename))))))
+     t)))
 
 (defun subed-record-compile-group-by-output-file (list)
   "Return a list of ((output-filename sub sub sub) (output-filename sub sub sub))."
@@ -384,7 +381,7 @@ Returns an audio track."
     (setq current
           (seq-take-while (lambda (o) (null (plist-get o :output))) list))
     (when current
-      (setq result (cons subed-record-compile-output-filename current))
+      (setq result (list (cons subed-record-compile-output-filename current)))
       (setq list (seq-drop list (length current))))
     (while list
       (setq current (seq-take-while (lambda (o) (null (plist-get o :output))) (cdr list)))
@@ -397,7 +394,7 @@ Returns an audio track."
       (setq list (seq-drop list (1+ (length current)))))
     (reverse result)))
 
-(defun subed-record-compile-video (&optional beg end include &rest _)
+(defun subed-record-compile-video (&optional beg end include &rest play-afterwards)
   "Create output file with video, audio, and subtitles.
 INCLUDE should be a list of the form (video audio subtitles)."
   (interactive (list (if (region-active-p) (min (point) (mark)) (point-min))
@@ -410,11 +407,18 @@ INCLUDE should be a list of the form (video audio subtitles)."
          (output-groups (subed-record-compile-group-by-output-file selection)))
     (mapc
      (lambda (output-group)
-       (compile-media
+       (apply
+        #'compile-media
         (seq-filter
          (lambda (track) (member (car track) include))
          (subed-record-compile--format-tracks (cdr output-group)))
-        (car output-group)))
+        (car output-group)
+        (when play-afterwards
+          (list
+           :sentinel     
+           (lambda (process event)
+             (when (string-match "finished" event)
+               (mpv-play (car output-group))))))))
      output-groups)))
 
 (defun subed-record-compile-test-visuals (&optional limit)
