@@ -365,14 +365,15 @@ Returns an audio track."
   (interactive)
   (apply 'subed-record-compile-video (append (list beg end '(audio subtitles)) args)))
 
-(defun subed-record-compile-try-flow (&optional beg end)
+(defun subed-record-compile-try-flow (&optional beg end make-video)
   "Try a segment to see if the audio flows well."
   (interactive (list (if (region-active-p) (min (point) (mark)) (point-min))
-                     (if (region-active-p) (max (point) (mark)) (point-max))))
+                     (if (region-active-p) (max (point) (mark)) (point-max))
+                     current-prefix-arg))
   (save-excursion
-    (subed-record-compile-audio
-     beg end
-     t)))
+    (if make-video
+        (subed-record-compile-video beg end nil t)
+      (subed-record-compile-audio beg end t))))
 
 (defun subed-record-compile-group-by-output-file (list)
   "Return a list of ((output-filename sub sub sub) (output-filename sub sub sub))."
@@ -416,7 +417,7 @@ INCLUDE should be a list of the form (video audio subtitles)."
         (when play-afterwards
           (list
            :sentinel     
-           (lambda (process event)
+           (lambda (_ event)
              (when (string-match "finished" event)
                (mpv-play (car output-group))))))))
      output-groups)))
