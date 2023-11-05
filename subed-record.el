@@ -109,7 +109,11 @@ Use 'arecord -l' at the command line to find out what device to use."
   :lighter " REC"
   (if subed-record-minor-mode
       (progn
-        (subed-record-start-recording (concat (file-name-sans-extension (buffer-file-name)) subed-record-extension))
+        (subed-record-start-recording
+				 (concat (file-name-sans-extension (buffer-file-name))
+								 "-"
+								 (format-time-string "%Y-%m-%d-%H%M%S")
+								 subed-record-extension))
         (message "Recording..."))
     (subed-record-stop-recording)
     (message "Stopped.")))
@@ -192,7 +196,8 @@ files are overwritten."
           (apply 'start-process "ffmpeg"
 		             (current-buffer)
 		             subed-record-ffmpeg-executable
-		             (append subed-record-ffmpeg-args (list filename) nil)))))
+		             (append subed-record-ffmpeg-args (list filename) nil)))
+		(display-buffer (current-buffer))))
 
 ;;; Using sox to record
 
@@ -218,10 +223,16 @@ files are overwritten."
   (interactive)
   (let ((end-time (subed-record-offset-ms)))
     (subed-set-subtitle-time-stop end-time)
+		(subed-set-subtitle-text
+		 (format "#+AUDIO: %s\n%s"
+						 subed-record-filename
+						 (replace-regexp-in-string
+							"#\\+AUDIO: .*\n" ""
+							(subed-subtitle-text))))
     (when (subed-forward-subtitle-text)
       (subed-set-subtitle-time-start end-time)
       (subed-set-subtitle-time-stop 0)
-      (recenter-top-bottom))))
+      (recenter))))
 
 (defun subed-record-retry ()
   "Try recording this segment again."
