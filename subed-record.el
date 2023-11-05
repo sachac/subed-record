@@ -407,6 +407,8 @@ Returns an audio track."
       (setq list (seq-drop list (1+ (length current)))))
     (reverse result)))
 
+(defvar subed-record-sync t "Do it synchronously.")
+
 (defun subed-record-compile-video (&optional beg end include &rest play-afterwards)
   "Create output file with video, audio, and subtitles.
 INCLUDE should be a list of the form (video audio subtitles)."
@@ -416,12 +418,12 @@ INCLUDE should be a list of the form (video audio subtitles)."
   (setq include (or include '(video audio subtitles)))
   (let* ((selection
           (subed-record-compile-get-base-selection (or beg (point-min))
-                                                   (or end (point-max))))
+                                       (or end (point-max))))
          (output-groups (subed-record-compile-group-by-output-file selection)))
     (mapc
      (lambda (output-group)
        (apply
-        #'compile-media
+        (if subed-record-sync #'compile-media-sync #'compile-media)
         (seq-filter
          (lambda (track) (member (car track) include))
          (subed-record-compile--format-tracks (cdr output-group)))
