@@ -100,6 +100,7 @@ Use 'arecord -l' at the command line to find out what device to use."
 (defun subed-record ()
   "Turn on subed-record-minor-mode."
   (interactive)
+	(setq-local subed-enforce-time-boundaries nil)
   (subed-record-minor-mode 1))
 
 ;;;###autoload
