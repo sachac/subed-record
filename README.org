@@ -215,6 +215,7 @@ Audio segments will be concatenated, one after the other. Visuals
 time until the next visual is specified. Visual information will be
 removed from the subtitles, and the resulting subtitles will accompany
 the audio segments.
+
 * Multiple output files
 
 You can specify multiple output files with the ~#+OUTPUT:~ keyword, like this:
