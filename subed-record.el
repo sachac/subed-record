@@ -382,11 +382,13 @@ Returns an audio track."
                              o)))
                  list)))
 
+;;;###autoload
 (defun subed-record-compile-audio (&optional beg end &rest args)
   "Compile just the audio."
   (interactive)
   (apply 'subed-record-compile-video (append (list beg end '(audio subtitles)) args)))
 
+;;;###autoload
 (defun subed-record-compile-try-flow (&optional beg end make-video)
   "Try a segment to see if the audio flows well."
   (interactive (list (if (region-active-p) (min (point) (mark)) (point-min))
@@ -424,6 +426,7 @@ Returns an audio track."
 
 (defvar subed-record-sync t "Do it synchronously.")
 
+;;;###autoload
 (defun subed-record-compile-video (&optional beg end include &rest play-afterwards after-func)
   "Create output file with video, audio, and subtitles.
 INCLUDE should be a list of the form (video audio subtitles)."
@@ -445,7 +448,7 @@ INCLUDE should be a list of the form (video audio subtitles)."
         (car output-group)
         (when play-afterwards
           (list
-           :sentinel     
+           :sentinel
            (lambda (_ event)
              (when (string-match "finished" event)
                (mpv-play (car output-group))
@@ -529,8 +532,38 @@ other."
              (with-current-buffer (current-buffer)
                (unless (region-active-p)
                  (setq beg (point-min) end (point-max)))
-               (subed-record-get-selection-for-region beg end)))))) 
+               (subed-record-get-selection-for-region beg end))))))
 
+
+(defun subed-record-media-file ()
+	"Return the media file."
+	(save-excursion
+		(subed-jump-to-subtitle-end)
+		(when (re-search-backward "#\\+AUDIO: \\(.+\\)" nil t)
+			(match-string 1))))
+
+(defun subed-record-set-up ()
+	"Add #+AUDIO as the input."
+	(interactive)
+	(remove-hook 'subed-mpv-file-loaded-hook #'subed-mpv-pause t)
+	(remove-hook 'subed-mpv-file-loaded-hook #'subed-mpv-jump-to-current-subtitle t)
+	(add-hook 'subed-media-file-functions #'subed-record-media-file -100 t))
+
+(defun subed-record-insert-audio-source-note (&optional prefix)
+	"Add a comment setting #+AUDIO to the current media file.
+Call with a prefix argument in order to set it to the MPV
+#+AUDIO file."
+	(interactive "p")
+	(let ((comment (string-trim (or (subed-subtitle-comment) ""))))
+		(subed-set-subtitle-comment
+		 (concat comment
+						 (if (string= comment "") "" "\n")
+						 "#+AUDIO: "
+						 (file-relative-name
+							(if prefix
+									(or (subed-record-media-file) (subed-media-file))
+								subed-mpv-media-file))
+						 "\n\n"))))
 
 (provide 'subed-record)
 
