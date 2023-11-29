@@ -139,7 +139,7 @@ Use 'arecord -l' at the command line to find out what device to use."
 
 (defun subed-record-offset-ms (&optional time)
   "Milliseconds since the start of recording."
-  (* (float-time (time-subtract (or time (current-time)) subed-record-start-time)) 1000.0)) 
+  (* (float-time (time-subtract (or time (current-time)) subed-record-start-time)) 1000.0))
 
 (defun subed-record-stop-recording (&optional time)
   "Finish recording."
@@ -169,7 +169,7 @@ files are overwritten."
             "\\2"
             (replace-regexp-in-string "\n[ \t\n]*\n" "\n"
                                       (buffer-substring-no-properties
-                                       (point) 
+                                       (point)
                                        (org-end-of-subtree)))))
           filename)
       (with-temp-file filename
