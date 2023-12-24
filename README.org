@@ -65,7 +65,7 @@ WEBVTT
 
 NOTE
 #+CAPTION: Emacs News Highlights - emacsconf.org/2021/talks/news
-[[file:images/Screenshot_20211021_002952.png]]
+[[[[file:images/Screenshot_20211021_002952.png]]]]
 
 00:00:00.000 --> 00:00:00.000
 I'm Sacha Chua, and here are
@@ -261,3 +261,10 @@ a package that he wrote to make note taking faster and simpler.
 00:00:39.882 --> 00:00:44.319
 Afterwards, he will handle questions over IRC.
 #+end_example
+* Keywords
+
+- ~#+AUDIO:~ :: specify the audio file
+- ~#+OUTPUT:~ :: everything until the next output comment goes into the specified file.
+- ~#+CAPTION:~ :: text that will be displayed at the top
+- ~#+SKIP~ :: skip the following subtitle
+- ~[[file:...]]~ :: include that image or video
