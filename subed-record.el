@@ -263,16 +263,18 @@ modified list of plists."
 
 (defvar subed-record-override-output-filename nil "If non-nil, use this as the output file instead.")
 
-(defun subed-record-compile-get-output-file-from-org (list)
+(defun subed-record-compile-get-output-file-from-org (list &optional context)
 	(let ((filename
-				 (or subed-record-override-output-filename subed-record-compile-output-filename)))
+				 (or (plist-get context :output)
+						 subed-record-override-output-filename
+						 subed-record-compile-output-filename)))
 		(mapcar (lambda (info)
 							(if subed-record-override-output-filename
 									(plist-put info :output filename)
 								(mapc (lambda (field)
 												(let ((val (plist-get info field)))
 													(when val
-														(when (string-match "#\\+OUTPUT: \\(.+?\\)\n" val)
+														(when (string-match "#\\+OUTPUT: \\(.+?\\)\\(\n\\|$\\)" val)
 															(setq filename (match-string 1 val))
 															(setq info (plist-put info :output (match-string 1 val)))
 															(setq val (replace-match "" nil t val))
@@ -283,43 +285,62 @@ modified list of plists."
 							info)
 						list)))
 
-(defun subed-record-compile-add-open-captions (list)
+(defun subed-record-compile-add-open-captions (list &optional context)
   "Add open captions if specified."
-	(mapcar (lambda (info)
-						(if (plist-get info :open-captions)
+	(let (open-captions)
+		(when context
+			(setq open-captions (plist-get context :open-captions)))
+		(mapcar (lambda (info)
+							(when (string-match "#\\+CLOSED_CAPTIONS" (or (plist-get info :comment) ""))
+								(setq open-captions nil))
+							(when (string-match "#\\+OPEN_CAPTIONS" (or (plist-get info :comment) ""))
+								(setq open-captions t))
+							(when open-captions
 								(plist-put info :description (plist-get info :caption)))
-						info)
-					list))
+							(plist-put info :open-captions open-captions)
+							info)
+						list)))
 
-(defun subed-record-compile-get-visuals-from-org (list)
+(defun subed-record-compile-get-visuals-from-org (list &optional context)
   "Get visual information from Org syntax and store it in INFO."
-	(mapcar (lambda (info)
-						(mapc (lambda (field)
-										(let ((val (plist-get info field)))
-											(when val
-												(dolist (prop '((:description "#\\+CAPTION: \\(.+?\\)\n?")
-																				(:visual-file "\\[\\[file:\\([^]]+?\\)\\].+\n?")
-																				(:visual-start "#\\+VISUAL_START: \\(.+?\\) *\n?")
-																				(:visual-stop "#\\+VISUAL_START: \\(.+?\\) *\n?")))
-													(when (string-match (cadr prop) val)
-														(setq info (plist-put info (car prop) (match-string 1 val)))
-														(setq val (replace-match "" nil t val))))
-												(setq info (plist-put info field val)))))
-									'(:comment :caption))
-						info)
-					list))
+	(let* ((properties '((:description "#\\+CAPTION: \\(.+?\\)\\(\n\\|$\\)")
+											 (:visual-file "\\[\\[file:\\([^]]+?\\)\\].+\n?")
+											 (:visual-start "#\\+VISUAL_START: \\(.+?\\) *\\(\n\\|$\\)")
+											 (:visual-stop "#\\+VISUAL_START: \\(.+?\\) *\\(\n\\|$\\)")))
+				 (result (mapcar (lambda (info)
+													 (mapc (lambda (field)
+																	 (let ((val (plist-get info field)))
+																		 (when val
+																			 (dolist (prop properties)
+																				 (when (string-match (cadr prop) val)
+																					 (setq info (plist-put info (car prop) (match-string 1 val)))
+																					 (setq val (replace-match "" nil t val))))
+																			 (setq info (plist-put info field val)))))
+																 '(:comment :caption))
+													 info)
+												 list)))
+		;; if nothing is specified for the first entry and context specifies things, copy those
+		(dolist (prop properties)
+			(when (and (null (plist-get (car result) prop))
+								 (plist-get context prop))
+				(setcar result (plist-put (car result) prop (plist-get context prop)))))
+		result))
 
-(defun subed-record-compile-get-audio-info (list)
-  "Get the audio file or current media file."
-  (let ((audio-file (save-excursion (if (region-active-p) (goto-char (min (point) (mark)))
-																			(goto-char (point-min)))
-																		(or (subed-record-media-file) (subed-media-file)))))
+(defun subed-record-compile-get-audio-info (list &optional context)
+  "Get the audio file or current media file.
+If CONTEXT is specified, copy those settings."
+  (let ((audio-file
+				 (if context
+						 (plist-get context :audio-file)
+					 (save-excursion (if (region-active-p) (goto-char (min (point) (mark)))
+														 (goto-char (point-min)))
+													 (or (subed-record-media-file) (subed-media-file))))))
 		(mapcar
 		 (lambda (info)
 			 (mapc (lambda (field)
 							 (let ((val (plist-get info field)))
 								 (when val
-									 (if (string-match "#\\+AUDIO: \\(.+?\\)\n" val)
+									 (if (string-match "#\\+AUDIO: \\(.+?\\)\\(\n\\|$\\)" val)
 											 (progn
 												 (setq audio-file (match-string 1 val))
 												 (setq val (replace-match "" nil t val))))
@@ -329,29 +350,32 @@ modified list of plists."
 			 info)
 		 list)))
 
+(defun subed-record-compile--process-selection (list &optional context)
+	(seq-remove
+	 (lambda (c)
+		 (or (string-match "#\\+SKIP" (or (plist-get c :comment) ""))
+				 (string-match "#\\+SKIP" (or (plist-get c :caption) ""))))
+	 (seq-reduce
+		(lambda (val f)
+			(funcall f val context))
+		subed-record-compile-info-list-functions
+		(mapcar (lambda (sub)
+							(list :comment (and (elt sub 4) (substring-no-properties (elt sub 4)))
+										:caption (substring-no-properties (elt sub 3))
+										:start-ms (elt sub 1)
+										:stop-ms (elt sub 2)))
+						list))))
+
 (defun subed-record-compile-get-base-selection (&optional beg end)
   "Return entries for each caption."
-	(let (open-captions)
-		(seq-remove
-		 (lambda (c)
-			 (or (string-match "#\\+SKIP" (or (plist-get c :comment) ""))
-					 (string-match "#\\+SKIP" (or (plist-get c :caption) ""))))
-		 (seq-reduce
-			(lambda (val f) (funcall f val))
-			subed-record-compile-info-list-functions
-			(mapcar (lambda (sub)
-								(when (elt sub 4)
-									(cond
-									 ((string-match "#\\+OPEN_CAPTIONS" (elt sub 4))
-										(setq open-captions t))
-									 ((string-match "#\\+CLOSED_CAPTIONS" (elt sub 4))
-										(setq open-captions nil))))
-								(list :comment (and (elt sub 4) (substring-no-properties (elt sub 4)))
-											:caption (substring-no-properties (elt sub 3))
-											:open-captions open-captions
-											:start-ms (elt sub 1)
-											:stop-ms (elt sub 2)))
-							(subed-subtitle-list beg end))))))
+	;; Some directives apply to all succeeding subtitles,
+	;; like #+OUTPUT, #+AUDIO, #+CLOSED_CAPTIONS, and #+OPEN_CAPTIONS.
+	;; We need to process the previous ones as well.
+	(save-restriction
+		(widen)
+		(let ((previous-captions (subed-record-compile--process-selection (subed-subtitle-list (point-min) (1- beg)))))
+			;; copy :output, :audio-file
+			(subed-record-compile--process-selection (subed-subtitle-list beg end) (car (last previous-captions))))))
 
 (defun subed-record-compile--format-subtitles (list)
   "Make a temporary file containing the captions from LIST, set one after the other."
@@ -506,7 +530,7 @@ INCLUDE should be a list of the form (video audio subtitles)."
 								 (funcall after-func))))))))
      output-groups)))
 
-(defun subed-record-compile-video-get-command (&optional beg end include &rest play-afterwards after-func)
+(defun subed-record-compile-video-get-command (&optional beg end include play-afterwards after-func)
   "Copy the ffmpeg command."
   (interactive (list (if (region-active-p) (min (point) (mark)) (point-min))
                      (if (region-active-p) (max (point) (mark)) (point-max))
