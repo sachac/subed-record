@@ -223,12 +223,15 @@ files are overwritten."
   (interactive)
   (let ((end-time (subed-record-offset-ms)))
     (subed-set-subtitle-time-stop end-time)
-		(subed-set-subtitle-text
-		 (format "#+AUDIO: %s\n%s"
-						 subed-record-filename
-						 (replace-regexp-in-string
-							"#\\+AUDIO: .*\n" ""
-							(subed-subtitle-text))))
+		(subed-set-subtitle-comment
+		 (concat
+			(if (subed-subtitle-comment)
+					(concat (replace-regexp-in-string
+									 "#\\+AUDIO: .*\\(\n\\|$\\)?" ""
+									 (subed-subtitle-text))
+									"\n")
+				"")
+			(format "#+AUDIO: %s\n%s" subed-record-filename)))
     (when (subed-forward-subtitle-text)
       (subed-set-subtitle-time-start end-time)
       (subed-set-subtitle-time-stop 0)
@@ -271,15 +274,13 @@ modified list of plists."
 		(mapcar (lambda (info)
 							(if subed-record-override-output-filename
 									(plist-put info :output filename)
-								(mapc (lambda (field)
-												(let ((val (plist-get info field)))
-													(when val
-														(when (string-match "#\\+OUTPUT: \\(.+?\\)\\(\n\\|$\\)" val)
-															(setq filename (match-string 1 val))
-															(setq info (plist-put info :output (match-string 1 val)))
-															(setq val (replace-match "" nil t val))
-															(setq info (plist-put info field val))))))
-											'(:comment :caption))
+								(let ((val (plist-get info :comment)))
+									(when val
+										(when (string-match "#\\+OUTPUT: \\(.+?\\)\\(\n\\|$\\)" val)
+											(setq filename (match-string 1 val))
+											(setq info (plist-put info :output (match-string 1 val)))
+											(setq val (replace-match "" nil t val))
+											(setq info (plist-put info :comment val)))))
 								(unless (plist-get info :output)
 									(plist-put info :output filename)))
 							info)
@@ -304,19 +305,17 @@ modified list of plists."
 (defun subed-record-compile-get-visuals-from-org (list &optional context)
   "Get visual information from Org syntax and store it in INFO."
 	(let* ((properties '((:description "#\\+CAPTION: \\(.+?\\)\\(\n\\|$\\)")
-											 (:visual-file "\\[\\[file:\\([^]]+?\\)\\].+\n?")
+											 (:visual-file "\\[\\[\\(?:file:\\)?\\([^]]+?\\)\\].+\n?")
 											 (:visual-start "#\\+VISUAL_START: \\(.+?\\) *\\(\n\\|$\\)")
 											 (:visual-stop "#\\+VISUAL_START: \\(.+?\\) *\\(\n\\|$\\)")))
 				 (result (mapcar (lambda (info)
-													 (mapc (lambda (field)
-																	 (let ((val (plist-get info field)))
-																		 (when val
-																			 (dolist (prop properties)
-																				 (when (string-match (cadr prop) val)
-																					 (setq info (plist-put info (car prop) (match-string 1 val)))
-																					 (setq val (replace-match "" nil t val))))
-																			 (setq info (plist-put info field val)))))
-																 '(:comment :caption))
+													 (let ((val (plist-get info :comment)))
+														 (when val
+															 (dolist (prop properties)
+																 (when (string-match (cadr prop) val)
+																	 (setq info (plist-put info (car prop) (match-string 1 val)))
+																	 (setq val (replace-match "" nil t val))
+																	 (setq info (plist-put info :comment val))))))
 													 info)
 												 list)))
 		;; if nothing is specified for the first entry and context specifies things, copy those
@@ -337,24 +336,20 @@ If CONTEXT is specified, copy those settings."
 													 (or (subed-record-media-file) (subed-media-file))))))
 		(mapcar
 		 (lambda (info)
-			 (mapc (lambda (field)
-							 (let ((val (plist-get info field)))
-								 (when val
-									 (if (string-match "#\\+AUDIO: \\(.+?\\)\\(\n\\|$\\)" val)
-											 (progn
-												 (setq audio-file (match-string 1 val))
-												 (setq val (replace-match "" nil t val))))
-									 (plist-put info :audio-file audio-file)
-									 (setq info (plist-put info field val)))))
-						 '(:comment :caption))
+			 (let ((val (plist-get info :comment)))
+				 (when val
+					 (when (string-match "#\\+AUDIO: \\(.+?\\)\\(\n\\|$\\)" val)
+						 (setq audio-file (match-string 1 val))
+						 (setq val (replace-match "" nil t val))
+						 (setq info (plist-put info :comment val))))
+				 (plist-put info :audio-file audio-file))
 			 info)
 		 list)))
 
 (defun subed-record-compile--process-selection (list &optional context)
 	(seq-remove
 	 (lambda (c)
-		 (or (string-match "#\\+SKIP" (or (plist-get c :comment) ""))
-				 (string-match "#\\+SKIP" (or (plist-get c :caption) ""))))
+		 (string-match "#\\+SKIP" (or (plist-get c :comment) "")))
 	 (seq-reduce
 		(lambda (val f)
 			(funcall f val context))
@@ -380,7 +375,7 @@ If CONTEXT is specified, copy those settings."
 (defun subed-record-compile--format-subtitles (list)
   "Make a temporary file containing the captions from LIST, set one after the other."
   (when list
-    (let ((subtitle-file (concat (make-temp-name "/tmp/captions") ".vtt")))
+    (let ((subtitle-file (concat (make-temp-name "captions") ".vtt")))
 			(subed-record-compile-subtitles subtitle-file list)
       subtitle-file)))
 
@@ -390,12 +385,14 @@ If CONTEXT is specified, copy those settings."
 	(let ((text (and (member 'text include) (subed-record-compile--selection-descriptions list)))
 				(video (and (member 'video include) (subed-record-compile--selection-visuals list)))
 				(audio (and (member 'audio include) (subed-record-compile--selection-audio list)))
-				(subtitles (and (member 'subtitles include) (subed-record-compile--format-subtitles list))))
+				;; (subtitles (and (member 'subtitles include) (subed-record-compile--format-subtitles list)))
+				)
 		(append
 		 (when video (list (cons 'video video)))
 		 (when audio (list (cons 'audio audio)))
 		 (when text (list (cons 'text text)))
-		 (when subtitles (list (list 'subtitles (list :source subtitles :temporary t)))))))
+		 ;; (when subtitles (list (list 'subtitles (list :source subtitles :temporary t))))
+		 )))
 
 (defun subed-record-compile-get-selection-for-region (beg end)
   "Return a `compile-media'-formatted set of tracks for the region."
@@ -436,7 +433,8 @@ If CONTEXT is specified, copy those settings."
 												 (when (plist-get (car selection) :visual-stop)
 													 (subed-timestamp-to-msecs (plist-get (car selection) :visual-stop)))))
         (setq result (cons (append (list :source
-                                         (expand-file-name (plist-get (car selection) :visual-file)))
+                                         (file-relative-name
+																					(plist-get (car selection) :visual-file)))
                                    current)
                            result)))
       (setf current (plist-put current :duration (+ (or (plist-get current :duration) 0)
@@ -450,7 +448,7 @@ Returns an audio track."
   (delq nil
         (seq-map (lambda (o)
                    (when (plist-get o :audio-file)
-                     (append (list :source (expand-file-name (plist-get o :audio-file)))
+                     (append (list :source (file-relative-name (plist-get o :audio-file)))
                              o)))
                  list)))
 
@@ -458,7 +456,7 @@ Returns an audio track."
 (defun subed-record-compile-audio (&optional beg end &rest args)
   "Compile just the audio."
   (interactive)
-  (apply 'subed-record-compile-video (append (list beg end '(audio)) args)))
+  (apply 'subed-record-compile-video (append (list beg end '(audio subtitles)) args)))
 
 ;;;###autoload
 (defun subed-record-compile-try-flow (&optional beg end make-video)
@@ -499,7 +497,7 @@ Returns an audio track."
 (defvar subed-record-sync t "Do it synchronously.")
 
 ;;;###autoload
-(defun subed-record-compile-video (&optional beg end include &rest play-afterwards after-func)
+(defun subed-record-compile-video (&optional beg end include play-afterwards after-func)
   "Create output file with video, audio, and subtitles.
 INCLUDE should be a list of the form (video audio subtitles)."
   (interactive (list (if (region-active-p) (min (point) (mark)) (point-min))
@@ -514,6 +512,12 @@ INCLUDE should be a list of the form (video audio subtitles)."
 										subed-record-sync)))
     (mapc
      (lambda (output-group)
+			 (when (and (member 'subtitles include)
+									(not (string=
+												(buffer-file-name)
+												(expand-file-name (concat (file-name-sans-extension (car output-group)) ".vtt")))))
+				 (subed-record-compile-subtitles (concat (file-name-sans-extension (car output-group)) ".vtt")
+														 (cdr output-group)))
        (apply
         (if subed-record-sync #'compile-media-sync #'compile-media)
         (seq-filter
@@ -529,6 +533,49 @@ INCLUDE should be a list of the form (video audio subtitles)."
 							 (when (functionp after-func)
 								 (funcall after-func))))))))
      output-groups)))
+
+(defun subed-record-section ()
+	"Return the start and end of the current section.
+The current section is defined by #+OUTPUT commands."
+	(let* ((start
+					(save-excursion
+						(if (string-match "#\\+OUTPUT:" (or (subed-subtitle-comment) ""))
+								(progn (subed-jump-to-subtitle-comment) (point))
+							;; keep going backwards
+							(while (and (not (bobp))
+													(if (subed-backward-subtitle-start-pos)
+															(not (string-match "#\\+OUTPUT:" (or (subed-subtitle-comment) "")))
+														(goto-char (point-min)))))
+							(when (string-match "#\\+OUTPUT:" (or (subed-subtitle-comment) ""))
+								(subed-jump-to-subtitle-comment)
+								(point)))))
+				 (end
+					(save-excursion
+						;; keep going backwards
+						(while (and (not (eobp))
+												(if (subed-forward-subtitle-start-pos)
+														(not (string-match "#\\+OUTPUT:" (or (subed-subtitle-comment) "")))
+													(goto-char (point-max)))))
+						(when (string-match "#\\+OUTPUT:" (or (subed-subtitle-comment) ""))
+							(subed-jump-to-subtitle-comment)
+							(point)))))
+		(when (and start end)
+			(list start end))))
+
+(defun subed-record-mark-section ()
+	"Select the current section specified by #+OUTPUT:."
+	(interactive)
+	(when-let ((section (subed-record-section)))
+		(setq deactivate-mark nil)
+		(goto-char (car section))
+		(set-mark (cadr section))))
+
+(defun subed-record-compile-video-for-this-section ()
+	"Find the current section that specifies #+OUTPUT:.
+Compile the video for just that section."
+	(interactive)
+	(when-let ((section (subed-record-section)))
+		(subed-record-compile-video (car section) (cadr section) nil t)))
 
 (defun subed-record-compile-video-get-command (&optional beg end include play-afterwards after-func)
   "Copy the ffmpeg command."
@@ -664,6 +711,45 @@ Call with a prefix argument in order to set it to the MPV
 									(or (subed-record-media-file) (subed-media-file))
 								subed-mpv-media-file))
 						 "\n\n"))))
+
+(defun subed-record-copy-assets-to-directory-and-rewrite (destination-dir)
+	"Copy all the visual and audio assets to a specified directory."
+	(interactive (list (file-relative-name
+											(read-file-name "Destination: ")
+											(file-name-directory (buffer-file-name)))))
+	(subed-for-each-subtitle (point-min) (point-max) t
+		(when-let ((comment (subed-subtitle-comment)))
+			(when (string-match "#\\+AUDIO: \\(.*\\)\\(\n\\|$\\)" comment)
+				(let ((filename (match-string 1 comment)))
+					(unless (string= (expand-file-name filename)
+													 (expand-file-name (file-name-nondirectory filename)
+																						 destination-dir))
+						(copy-file filename
+											 (expand-file-name (file-name-nondirectory filename)
+																				 destination-dir)
+											 t)
+						(setq comment
+									(replace-regexp-in-string
+									 (regexp-quote filename)
+									 (file-name-concat destination-dir
+																		 (file-name-nondirectory filename))
+									 comment)))))
+			(when (string-match "\\[\\[\\(?:file:\\)?\\(.*?\\)\\(\\]\\|\n\\|$\\)" comment)
+				(let ((filename (match-string 1 comment)))
+					(unless (string= (expand-file-name filename)
+													 (expand-file-name (file-name-nondirectory filename)
+																						 destination-dir))
+						(copy-file filename
+											 (expand-file-name (file-name-nondirectory filename)
+																				 destination-dir)
+											 t)
+						(setq comment
+									(replace-regexp-in-string
+									 (regexp-quote filename)
+									 (file-name-concat destination-dir
+																		 (file-name-nondirectory filename))
+									 comment)))))
+			(subed-set-subtitle-comment comment))))
 
 (provide 'subed-record)
 
