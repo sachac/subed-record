@@ -268,3 +268,30 @@ Afterwards, he will handle questions over IRC.
 - ~#+CAPTION:~ :: text that will be displayed at the top
 - ~#+SKIP~ :: skip the following subtitle
 - ~[[file:...]]~ :: include that image or video
+
+* Notes
+
+subed-record timestamps might overlap if you use multiple audio sources.
+You may want something like this at the end of your file:
+
+#+begin_example
+NOTE
+Local Variables:
+subed-enforce-time-boundaries: nil
+End:
+#+end_example
+
+If you like to move sections around, you'll also want to ~(remove-hook
+'subed-sanitize-functions 'subed-sort)~.
+
+While testing, it can be useful to add ~"-r"~ ~"1"~ to ~compile-media-ffmpeg-arguments~. It makes a video with one frame per second, which is choppy but still handy for checking the flow.
+
+If you're compiling or trying part of a video and you're midway between visuals, the previous visual won't be included. To work around this, start with a caption that has a file link for the visual.
+
+Related posts:
+
+- [[https://sachachua.com/blog/2023/12/using-subed-record-in-emacs-to-edit-audio-and-clean-up-oopses/][Using subed-record in Emacs to edit audio and clean up oopses]]
+- [[https://sachachua.com/blog/2024/01/emacsconf-backstage-making-lots-of-intro-videos-with-subed-record/][EmacsConf backstage: making lots of intro videos with subed-record]]
+
+
+https://sachachua.com/blog/category/subed/
