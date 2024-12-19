@@ -1,7 +1,5 @@
 ;;; subed-record.el --- Record audio in segments and compile it into a file  -*- lexical-binding: t; -*-
 
-;; Copyright (c) 2021 Sacha Chua
-
 ;; Author: Sacha Chua <sacha@sachachua.com>
 ;; Version: 0.2
 ;; 
@@ -57,10 +55,11 @@ This should account for the sound of the keystroke."
 
 (defcustom subed-record-backend 'ffmpeg
   "Recording backend to use."
-  :type '(choice (:const 'sox)
-                 (:const 'obs)
-                 (:const 'ffmpeg)
-                 (:const nil))
+  :type '(choice (const sox)
+                 (const obs)
+                 (const obs-old)
+                 (const ffmpeg)
+                 (const nil))
   :group 'subed-record)
 
 (defcustom subed-record-sox-executable "rec"
@@ -68,12 +67,12 @@ This should account for the sound of the keystroke."
   :group 'subed-record
   :type 'string)
 
-(defcustom subed-record-sox-args (list "-r" "48000" "-c" "1")
+(defcustom subed-record-sox-args (list "-d" "-r" "48000" "-c" "1" "--type" "wav")
   "Extra arguments for sox recording process."
   :type '(repeat string)
   :group 'subed-record)
 
-(defcustom subed-record-ffmpeg-args '("-f" "alsa" "-i" "hw:0" "-y")
+(defcustom subed-record-ffmpeg-args '("-f" "alsa" "-i" "default" "-y")
   "Arguments to pass to ffmpeg for recording.
 Use 'arecord -l' at the command line to find out what device to use."
   :type '(repeat string)
@@ -125,30 +124,48 @@ Use 'arecord -l' at the command line to find out what device to use."
   (setq subed-record-start-time (current-time))
   (if (process-live-p subed-record-process)
       (quit-process subed-record-process))
-  (cond
-   ((eq subed-record-backend 'obs)
+  (pcase subed-record-backend
+   ('obs-old
     (when (not (websocket-openp obs-websocket))
       (obs-websocket-connect))
     (obs-websocket-send "SetRecordingFolder" :rec-folder (expand-file-name (file-name-directory filename)))
     (obs-websocket-send "SetFilenameFormatting" :filename-formatting (file-name-nondirectory filename))
     (obs-websocket-send "StartRecording"))
-   ((eq subed-record-backend 'ffmpeg)
+   ('obs
+    (when (not (websocket-openp obs-websocket))
+      (obs-websocket-connect))
+		;; filename is ignored. StopRecord will set filename
+    (obs-websocket-send "GetRecordDirectory")
+    (obs-websocket-send "StartRecord"))
+   ('ffmpeg
     (subed-record-ffmpeg-start filename))
-   ((eq subed-record-backend 'sox)
+   ('sox
     (subed-record-sox-start filename))))
 
 (defun subed-record-offset-ms (&optional time)
   "Milliseconds since the start of recording."
   (* (float-time (time-subtract (or time (current-time)) subed-record-start-time)) 1000.0))
 
+(defun subed-record-get-filename-from-obs-stop-record-callback (_frame payload)
+  (when-let (d (plist-get payload :d))
+    (when-let (requestStatus (plist-get d :requestStatus))
+      (when-let (result (plist-get requestStatus :result))
+	(when-let (responseData (plist-get d :responseData))
+	  (when-let (fn (plist-get responseData :outputPath))
+	    (unless fn
+	      (error "Failed to get output filename on StopRecord request")
+	      (setq subed-record-filename fn))))))))
+
 (defun subed-record-stop-recording (&optional time)
   "Finish recording."
   (interactive)
-  (if (eq (subed-subtitle-msecs-stop) 0)
-      (subed-record-accept-segment))
+	(when (derived-mode-p 'subed-mode)
+		(when (eq (subed-subtitle-msecs-stop) 0)
+			(subed-record-accept-segment)))
   (when (process-live-p subed-record-process) (quit-process subed-record-process))
-  (when (eq subed-record-backend 'obs)
-    (obs-websocket-send "StopRecording")))
+	(pcase subed-record-backend
+		('obs-old (obs-websocket-send "StopRecording"))
+		('obs (obs-websocket-send "StopRecord" #'subed-record-get-filename-from-obs-stop-record-callback))))
 
 ;;; Converting from Org
 
@@ -211,10 +228,9 @@ files are overwritten."
         (apply
          'start-process
          "sox"
-         nil
+         "*sox*"
          subed-record-sox-executable
-         filename
-         subed-record-sox-args)))
+         (append subed-record-sox-args (list filename)))))
 
 ;;; Working with segments
 
@@ -286,6 +302,10 @@ modified list of plists."
 							info)
 						list)))
 
+;; there must be a better way to do this, but let's use this for now
+(defun subed-record-parse-attributes (s)
+	(read (concat "(" s ")")))
+
 (defun subed-record-compile-add-open-captions (list &optional context)
   "Add open captions if specified."
 	(let (open-captions)
@@ -294,10 +314,13 @@ modified list of plists."
 		(mapcar (lambda (info)
 							(when (string-match "#\\+CLOSED_CAPTIONS" (or (plist-get info :comment) ""))
 								(setq open-captions nil))
-							(when (string-match "#\\+OPEN_CAPTIONS" (or (plist-get info :comment) ""))
-								(setq open-captions t))
-							(when open-captions
-								(plist-put info :description (plist-get info :caption)))
+							(when (string-match "#\\+OPEN_CAPTIONS *\\(.*\\)" (or (plist-get info :comment) ""))
+								(setq open-captions
+											(if (match-string 1 (plist-get info :comment))
+													(subed-record-parse-attributes (match-string 1 (plist-get info :comment)))
+												t)))
+							;; (when open-captions
+							;; 	(plist-put info :description (plist-get info :caption)))
 							(plist-put info :open-captions open-captions)
 							info)
 						list)))
@@ -375,9 +398,9 @@ If CONTEXT is specified, copy those settings."
 (defun subed-record-compile--format-subtitles (list)
   "Make a temporary file containing the captions from LIST, set one after the other."
   (when list
-    (let ((subtitle-file (concat (make-temp-name "captions") ".vtt")))
+    (let ((subtitle-file (make-temp-file "captions" nil ".vtt")))
 			(subed-record-compile-subtitles subtitle-file list)
-      subtitle-file)))
+			subtitle-file)))
 
 (defun subed-record-compile--format-tracks (list &optional include)
   "Prepare LIST for use in `compile-media.'"
@@ -385,14 +408,14 @@ If CONTEXT is specified, copy those settings."
 	(let ((text (and (member 'text include) (subed-record-compile--selection-descriptions list)))
 				(video (and (member 'video include) (subed-record-compile--selection-visuals list)))
 				(audio (and (member 'audio include) (subed-record-compile--selection-audio list)))
-				;; (subtitles (and (member 'subtitles include) (subed-record-compile--format-subtitles list)))
-				)
+				(subtitles (and (member 'subtitles include) (subed-record-compile--format-subtitles list))))
 		(append
 		 (when video (list (cons 'video video)))
 		 (when audio (list (cons 'audio audio)))
 		 (when text (list (cons 'text text)))
-		 ;; (when subtitles (list (list 'subtitles (list :source subtitles :temporary t))))
-		 )))
+		 (when subtitles (list (list 'subtitles
+																 (list :source subtitles :temporary t
+																			 :open-captions (plist-get (car list) :open-captions))))))))
 
 (defun subed-record-compile-get-selection-for-region (beg end)
   "Return a `compile-media'-formatted set of tracks for the region."
@@ -424,6 +447,9 @@ If CONTEXT is specified, copy those settings."
       (when (plist-get (car selection) :visual-file)
         (setq current (copy-sequence (car selection)))
         (setq current (plist-put current :duration 0))
+				(when (and (plist-get (car selection) :comment)
+									 (string-match "loop-if-shorter" (plist-get (car selection) :comment)))
+					(setq current (plist-put current :loop-if-shorter t)))
         (setq current
 							(plist-put current :start-ms
 												 (when (plist-get (car selection) :visual-start)
@@ -433,8 +459,7 @@ If CONTEXT is specified, copy those settings."
 												 (when (plist-get (car selection) :visual-stop)
 													 (subed-timestamp-to-msecs (plist-get (car selection) :visual-stop)))))
         (setq result (cons (append (list :source
-                                         (file-relative-name
-																					(plist-get (car selection) :visual-file)))
+                                         (expand-file-name (plist-get (car selection) :visual-file)))
                                    current)
                            result)))
       (setf current (plist-put current :duration (+ (or (plist-get current :duration) 0)
@@ -448,7 +473,7 @@ Returns an audio track."
   (delq nil
         (seq-map (lambda (o)
                    (when (plist-get o :audio-file)
-                     (append (list :source (file-relative-name (plist-get o :audio-file)))
+                     (append (list :source (expand-file-name (plist-get o :audio-file)))
                              o)))
                  list)))
 
@@ -456,7 +481,7 @@ Returns an audio track."
 (defun subed-record-compile-audio (&optional beg end &rest args)
   "Compile just the audio."
   (interactive)
-  (apply 'subed-record-compile-video (append (list beg end '(audio subtitles)) args)))
+  (apply 'subed-record-compile-video (append (list beg end '(audio)) args)))
 
 ;;;###autoload
 (defun subed-record-compile-try-flow (&optional beg end make-video)
@@ -513,25 +538,28 @@ INCLUDE should be a list of the form (video audio subtitles)."
     (mapc
      (lambda (output-group)
 			 (when (and (member 'subtitles include)
+									(not (plist-get (car (assoc-default 'subtitles selection)) :open-captions))
 									(not (string=
 												(buffer-file-name)
 												(expand-file-name (concat (file-name-sans-extension (car output-group)) ".vtt")))))
 				 (subed-record-compile-subtitles (concat (file-name-sans-extension (car output-group)) ".vtt")
-														 (cdr output-group)))
+																				 (cdr output-group)))
        (apply
         (if subed-record-sync #'compile-media-sync #'compile-media)
         (seq-filter
          (lambda (track) (member (car track) include))
          (subed-record-compile--format-tracks (cdr output-group)))
         (car output-group)
-        (when play-afterwards
+        (when (and play-afterwards (not subed-record-sync))
           (list
            :sentinel
            (lambda (_ event)
              (when (string-match "finished" event)
                (mpv-play (car output-group))
 							 (when (functionp after-func)
-								 (funcall after-func))))))))
+								 (funcall after-func)))))))
+			 (when (and subed-record-sync play-afterwards)
+				 (mpv-play (car output-group))))
      output-groups)))
 
 (defun subed-record-section ()
@@ -690,10 +718,11 @@ other."
 			(match-string 1))))
 
 (defun subed-record-set-up ()
-	"Add #+AUDIO as the input."
+	"Add #+AUDIO as the input and turn off time boundaries."
 	(interactive)
 	(remove-hook 'subed-mpv-file-loaded-hook #'subed-mpv-pause t)
 	(remove-hook 'subed-mpv-file-loaded-hook #'subed-mpv-jump-to-current-subtitle t)
+	(setq-local subed-enforce-time-boundaries nil)
 	(add-hook 'subed-media-file-functions #'subed-record-media-file -100 t))
 
 (defun subed-record-insert-audio-source-note (&optional prefix)
@@ -751,6 +780,7 @@ Call with a prefix argument in order to set it to the MPV
 									 comment)))))
 			(subed-set-subtitle-comment comment))))
 
+;; (subed-record-parse-attributes ":bg \"&H66000000\" :font-name \"sachacHand\"")
 (provide 'subed-record)
 
-;;; subed-waveform.el ends here
+;;; subed-record.el ends here

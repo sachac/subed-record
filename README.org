@@ -65,7 +65,7 @@ WEBVTT
 
 NOTE
 #+CAPTION: Emacs News Highlights - emacsconf.org/2021/talks/news
-[[[[file:images/Screenshot_20211021_002952.png]]]]
+[[file:images/Screenshot_20211021_002952.png]]
 
 00:00:00.000 --> 00:00:00.000
 I'm Sacha Chua, and here are
@@ -114,9 +114,9 @@ in his update, so check out his talk.
 NOTE
 #+AUDIO: native.ogg
 #+CAPTION: emacsconf.org/2021/talks/native/
-[[
+[[file:images/native-comp.png]]
+
 00:00:00.970 --> 00:00:02.840
-file:images/native-comp.png]]
 Andrea Corallo's giving a talk
 
 00:00:02.840 --> 00:00:04.475
@@ -268,6 +268,7 @@ Afterwards, he will handle questions over IRC.
 - ~#+CAPTION:~ :: text that will be displayed at the top
 - ~#+SKIP~ :: skip the following subtitle
 - ~[[file:...]]~ :: include that image or video
+- ~#+VISUAL_OPTIONS: loop-if-shorter~ :: if the video or animated GIF is shorter than the section, loop it for the duration of the section
 
 * Notes
 
