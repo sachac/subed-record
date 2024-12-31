@@ -330,7 +330,8 @@ modified list of plists."
 	(let* ((properties '((:description "#\\+CAPTION: \\(.+?\\)\\(\n\\|$\\)")
 											 (:visual-file "\\[\\[\\(?:file:\\)?\\([^]]+?\\)\\].+\n?")
 											 (:visual-start "#\\+VISUAL_START: \\(.+?\\) *\\(\n\\|$\\)")
-											 (:visual-stop "#\\+VISUAL_START: \\(.+?\\) *\\(\n\\|$\\)")))
+											 (:visual-stop "#\\+VISUAL_START: \\(.+?\\) *\\(\n\\|$\\)")
+											 (:options "#\\+OPTIONS: \\(.+?\\) *\\(\n\\|$\\)")))
 				 (result (mapcar (lambda (info)
 													 (let ((val (plist-get info :comment)))
 														 (when val
@@ -389,6 +390,8 @@ If CONTEXT is specified, copy those settings."
 	;; Some directives apply to all succeeding subtitles,
 	;; like #+OUTPUT, #+AUDIO, #+CLOSED_CAPTIONS, and #+OPEN_CAPTIONS.
 	;; We need to process the previous ones as well.
+	(setq beg (or beg (point-min)))
+	(setq end (or end (point-max)))
 	(save-restriction
 		(widen)
 		(let ((previous-captions (subed-record-compile--process-selection (subed-subtitle-list (point-min) (1- beg)))))
@@ -408,13 +411,13 @@ If CONTEXT is specified, copy those settings."
 	(let ((text (and (member 'text include) (subed-record-compile--selection-descriptions list)))
 				(video (and (member 'video include) (subed-record-compile--selection-visuals list)))
 				(audio (and (member 'audio include) (subed-record-compile--selection-audio list)))
-				(subtitles (and (member 'subtitles include) (subed-record-compile--format-subtitles list))))
+				(subtitles (and (member 'subtitles include) (subed-record-compile-subtitles subtitle-file list))))
 		(append
 		 (when video (list (cons 'video video)))
 		 (when audio (list (cons 'audio audio)))
 		 (when text (list (cons 'text text)))
 		 (when subtitles (list (list 'subtitles
-																 (list :source subtitles :temporary t
+																 (list :subtitles subtitles
 																			 :open-captions (plist-get (car list) :open-captions))))))))
 
 (defun subed-record-compile-get-selection-for-region (beg end)
@@ -450,6 +453,12 @@ If CONTEXT is specified, copy those settings."
 				(when (and (plist-get (car selection) :comment)
 									 (string-match "loop-if-shorter" (plist-get (car selection) :comment)))
 					(setq current (plist-put current :loop-if-shorter t)))
+  			(when (and (plist-get (car selection) :comment)
+									 (string-match "same-edits" (or (plist-get (car selection) :options) "")))
+					(setq current
+								(plist-put
+								 current :same-edits
+								 (subed-record-compile--selection-audio selection))))
         (setq current
 							(plist-put current :start-ms
 												 (when (plist-get (car selection) :visual-start)
@@ -633,7 +642,7 @@ Compile the video for just that section."
 (defun subed-record-compile-subtitles (filename &optional list)
 	"Write subtitles to FILENAME.
 Subtitles timestamps will be reset so one subtitle follows the
-other."
+other, and directives will be removed."
 	(interactive (list (read-file-name "Output file: ")))
 	(let ((list (or list (subed-record-compile-get-base-selection))))
 		(with-current-buffer (find-file-noselect filename)
@@ -647,7 +656,12 @@ other."
                                        (+ msecs (- (plist-get info :stop-ms)
                                                    (plist-get info :start-ms)
                                                    1))
-                                       (plist-get info :caption))
+                                       (plist-get info :caption)
+																			 (when (> (length (string-trim
+																												 (or (plist-get info :comment)
+																														 "")))
+																								0)
+																				 (plist-get info :comment)))
                 (setq msecs (+ msecs (- (plist-get info :stop-ms)
                                         (plist-get info :start-ms)))))
               list))
