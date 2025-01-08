@@ -293,8 +293,8 @@ modified list of plists."
 								(let ((val (plist-get info :comment)))
 									(when val
 										(when (string-match "#\\+OUTPUT: \\(.+?\\)\\(\n\\|$\\)" val)
-											(setq filename (match-string 1 val))
-											(setq info (plist-put info :output (match-string 1 val)))
+											(setq filename (expand-file-name (match-string 1 val)))
+											(setq info (plist-put info :output filename))
 											(setq val (replace-match "" nil t val))
 											(setq info (plist-put info :comment val)))))
 								(unless (plist-get info :output)
@@ -325,6 +325,35 @@ modified list of plists."
 							info)
 						list)))
 
+(defun subed-record-compile-get-properties-from-comment (info properties)
+	"Move info from comment into properties.
+INFO should be a single cue."
+	(let ((val (plist-get info :comment)))
+		(when val
+			(dolist (prop properties)
+				(when (string-match (cadr prop) val)
+					(setq info (plist-put info (car prop)
+																(if (functionp (elt prop 2))
+																		(funcall (elt prop 2) val)
+																	(match-string 1 val))))
+					(setq val (replace-match "" nil t val))
+					(setq info (plist-put info :comment val)))))
+		info))
+
+(defun subed-record-compile-get-properties-from-comment-list (list properties)
+	(mapcar (lambda (info)
+						(subed-record-compile-get-properties-from-comment
+						 info properties))
+					list))
+
+(defun subed-record-compile-set-first-property-from-context (result properties &optional context)
+	(when result
+		(dolist (prop properties)
+			(when (and (null (plist-get (car result) (car prop)))
+								 (plist-get context (car prop)))
+				(setcar result (plist-put (car result) (car prop) (plist-get context (car prop)))))))
+	result)
+
 (defun subed-record-compile-get-visuals-from-org (list &optional context)
   "Get visual information from Org syntax and store it in INFO."
 	(let* ((properties '((:description "#\\+CAPTION: \\(.+?\\)\\(\n\\|$\\)")
@@ -332,43 +361,52 @@ modified list of plists."
 											 (:visual-start "#\\+VISUAL_START: \\(.+?\\) *\\(\n\\|$\\)")
 											 (:visual-stop "#\\+VISUAL_START: \\(.+?\\) *\\(\n\\|$\\)")
 											 (:options "#\\+OPTIONS: \\(.+?\\) *\\(\n\\|$\\)")))
-				 (result (mapcar (lambda (info)
-													 (let ((val (plist-get info :comment)))
-														 (when val
-															 (dolist (prop properties)
-																 (when (string-match (cadr prop) val)
-																	 (setq info (plist-put info (car prop) (match-string 1 val)))
-																	 (setq val (replace-match "" nil t val))
-																	 (setq info (plist-put info :comment val))))))
-													 info)
-												 list)))
+				 (result (subed-record-compile-get-properties-from-comment-list list properties)))
 		;; if nothing is specified for the first entry and context specifies things, copy those
-		(dolist (prop properties)
-			(when (and (null (plist-get (car result) prop))
-								 (plist-get context prop))
-				(setcar result (plist-put (car result) prop (plist-get context prop)))))
+		(subed-record-compile-set-first-property-from-context result properties context)
 		result))
+
+(defun subed-record-compile-copy-previous-property-if-nil (list properties)
+	(reverse
+	 (seq-reduce
+		(lambda (prev val)
+			(dolist (prop properties)
+				(unless (plist-get val prop)
+					(plist-put val prop (plist-get (car prev) prop))))
+			(cons val prev))
+		(cdr list)
+		(list (car list)))))
 
 (defun subed-record-compile-get-audio-info (list &optional context)
   "Get the audio file or current media file.
 If CONTEXT is specified, copy those settings."
-  (let ((audio-file
-				 (if context
-						 (plist-get context :audio-file)
-					 (save-excursion (if (region-active-p) (goto-char (min (point) (mark)))
-														 (goto-char (point-min)))
-													 (or (subed-record-media-file) (subed-media-file))))))
-		(mapcar
-		 (lambda (info)
-			 (let ((val (plist-get info :comment)))
-				 (when val
-					 (when (string-match "#\\+AUDIO: \\(.+?\\)\\(\n\\|$\\)" val)
-						 (setq audio-file (match-string 1 val))
-						 (setq val (replace-match "" nil t val))
-						 (setq info (plist-put info :comment val))))
-				 (plist-put info :audio-file audio-file))
-			 info)
-		 list)))
+  (let* ((audio-file
+					(if context
+							(plist-get context :audio-file)
+						(save-excursion (if (region-active-p) (goto-char (min (point) (mark)))
+															(goto-char (point-min)))
+														(or (subed-record-media-file) (subed-media-file)))))
+				 (properties '((:audio-file "#\\+AUDIO: \\(.+?\\)\\(\n\\|$\\)")
+											 (:pad-right "#\\+PAD_RIGHT: \\(.+?\\) *\\(\n\\|$\\)"
+																	 (lambda (val)
+																		 (floor
+																			(* 1000
+																				 (string-to-number (match-string 1 val))))))
+											 (:pad-left "#\\+PAD_LEFT: \\(.+?\\) *\\(\n\\|$\\)"
+																	(lambda (val)
+																		(floor (* 1000
+																							(string-to-number (match-string 1 val))))))))
+				 (result (subed-record-compile-get-properties-from-comment-list list properties)))
+		(setq result
+					(subed-record-compile-set-first-property-from-context
+					 result properties
+					 (append context
+									 (list :audio-file audio-file))))
+		(setq result
+					(subed-record-compile-copy-previous-property-if-nil
+					 result
+					 '(:audio-file)))
+		result))
 
 (defun subed-record-compile--process-selection (list &optional context)
 	(seq-remove
@@ -410,15 +448,11 @@ If CONTEXT is specified, copy those settings."
 	(setq include (or include '(text audio video subtitles)))
 	(let ((text (and (member 'text include) (subed-record-compile--selection-descriptions list)))
 				(video (and (member 'video include) (subed-record-compile--selection-visuals list)))
-				(audio (and (member 'audio include) (subed-record-compile--selection-audio list)))
-				(subtitles (and (member 'subtitles include) (subed-record-compile-subtitles subtitle-file list))))
+				(audio (and (member 'audio include) (subed-record-compile--selection-audio list))))
 		(append
 		 (when video (list (cons 'video video)))
 		 (when audio (list (cons 'audio audio)))
-		 (when text (list (cons 'text text)))
-		 (when subtitles (list (list 'subtitles
-																 (list :subtitles subtitles
-																			 :open-captions (plist-get (car list) :open-captions))))))))
+		 (when text (list (cons 'text text))))))
 
 (defun subed-record-compile-get-selection-for-region (beg end)
   "Return a `compile-media'-formatted set of tracks for the region."
@@ -449,7 +483,7 @@ If CONTEXT is specified, copy those settings."
       (setq stop (plist-get (car selection) :stop-ms))
       (when (plist-get (car selection) :visual-file)
         (setq current (copy-sequence (car selection)))
-        (setq current (plist-put current :duration 0))
+        (setq current (plist-put current :duration-ms 0))
 				(when (and (plist-get (car selection) :comment)
 									 (string-match "loop-if-shorter" (plist-get (car selection) :comment)))
 					(setq current (plist-put current :loop-if-shorter t)))
@@ -471,8 +505,12 @@ If CONTEXT is specified, copy those settings."
                                          (expand-file-name (plist-get (car selection) :visual-file)))
                                    current)
                            result)))
-      (setf current (plist-put current :duration (+ (or (plist-get current :duration) 0)
-                                                    (- (or stop 0) (or start 0)))))
+      (setf current (plist-put current :duration-ms (+ (or (plist-get current :duration-ms)
+																													 (plist-get current :duration)
+																													 0)
+																											 (or (plist-get (car selection) :pad-left) 0)
+																											 (or (plist-get (car selection) :pad-right) 0)
+																											 (- (or stop 0) (or start 0)))))
       (setq selection (cdr selection)))
     (nreverse result)))
 
@@ -639,6 +677,7 @@ Compile the video for just that section."
 			(kill-new result))
 		result))
 
+;; todo: move this to compile-media?
 (defun subed-record-compile-subtitles (filename &optional list)
 	"Write subtitles to FILENAME.
 Subtitles timestamps will be reset so one subtitle follows the
@@ -651,19 +690,22 @@ other, and directives will be removed."
 			(let ((msecs 0)
 						(subed-subtitle-spacing 0))
         (mapc (lambda (info)
-                (subed-append-subtitle nil
-                                       msecs
-                                       (+ msecs (- (plist-get info :stop-ms)
-                                                   (plist-get info :start-ms)
-                                                   1))
-                                       (plist-get info :caption)
-																			 (when (> (length (string-trim
-																												 (or (plist-get info :comment)
-																														 "")))
-																								0)
-																				 (plist-get info :comment)))
-                (setq msecs (+ msecs (- (plist-get info :stop-ms)
-                                        (plist-get info :start-ms)))))
+								(let ((duration
+											 (+ (or (plist-get info :pad-right) 0)
+													(or (plist-get info :pad-left) 0)
+													(- (plist-get info :stop-ms)
+														 (plist-get info :start-ms)))))
+									(subed-append-subtitle nil
+																				 msecs
+																				 (+ msecs (- duration 1))
+																				 (plist-get info :caption)
+																				 (let ((comment (string-trim
+																												 (replace-regexp-in-string
+																													"^#\\+.+" ""
+																													(or (plist-get info :comment) "")))))
+																					 (when (> (length comment) 0)
+																						 comment)))
+									(setq msecs (+ msecs duration))))
               list))
 			(save-buffer)))
 	filename)
@@ -793,6 +835,25 @@ Call with a prefix argument in order to set it to the MPV
 																		 (file-name-nondirectory filename))
 									 comment)))))
 			(subed-set-subtitle-comment comment))))
+
+(defun subed-record-sum-time (&optional beg end)
+	(interactive (list (and (region-active-p) (min (point) (mark)))
+                     (and (region-active-p) (max (point) (mark)))))
+	(let* ((selection (subed-record-compile-get-base-selection beg end))
+				 (sum (apply '+
+										 (mapcar
+											(lambda (o)
+												(+
+												 (or (plist-get o :duration-ms) 0)
+												 (or (plist-get o :duration) 0)
+												 (or (plist-get o :pad-left) 0)
+												 (or (plist-get o :pad-right) 0)
+												 (- (or (plist-get o :stop-ms) 0)
+														(or (plist-get o :start-ms) 0))))
+											selection))))
+		(when (called-interactively-p)
+			(message "%s" (subed-msecs-to-timestamp sum)))
+		sum))
 
 ;; (subed-record-parse-attributes ":bg \"&H66000000\" :font-name \"sachacHand\"")
 (provide 'subed-record)
