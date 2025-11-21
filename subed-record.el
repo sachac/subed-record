@@ -119,7 +119,9 @@ Use 'arecord -l' at the command line to find out what device to use."
 
 (defun subed-record-start-recording (filename)
   "Start recording. Save results to FILENAME."
-  (interactive)
+  (interactive (list (if (or current-prefix-arg (not (subed-media-file)))
+                         (read-file-name "File: ")
+                       (subed-media-file))))
   (setq subed-record-filename filename)
   (setq subed-record-start-time (current-time))
   (if (process-live-p subed-record-process)
@@ -207,13 +209,14 @@ files are overwritten."
 
 (defun subed-record-ffmpeg-start (filename)
   "Start recording into FILENAME."
+  (interactive (list (read-file-name "File: ")))
   (with-current-buffer (get-buffer-create "*ffmpeg*")
     (erase-buffer)
     (setq subed-record-process
           (apply 'start-process "ffmpeg"
 		             (current-buffer)
 		             subed-record-ffmpeg-executable
-		             (append subed-record-ffmpeg-args (list filename) nil)))
+		             (append subed-record-ffmpeg-args (list (expand-file-name filename)) nil)))
 		(display-buffer (current-buffer))))
 
 ;;; Using sox to record
@@ -242,12 +245,12 @@ files are overwritten."
 		(subed-set-subtitle-comment
 		 (concat
 			(if (subed-subtitle-comment)
-					(concat (replace-regexp-in-string
-									 "#\\+AUDIO: .*\\(\n\\|$\\)?" ""
-									 (subed-subtitle-text))
+					(concat (string-trim (replace-regexp-in-string
+									              "#\\+AUDIO: .*\\(\n\\|$\\)?" ""
+									              (subed-subtitle-comment)))
 									"\n")
 				"")
-			(format "#+AUDIO: %s\n%s" subed-record-filename)))
+			(format "#+AUDIO: %s" subed-record-filename)))
     (when (subed-forward-subtitle-text)
       (subed-set-subtitle-time-start end-time)
       (subed-set-subtitle-time-stop 0)
