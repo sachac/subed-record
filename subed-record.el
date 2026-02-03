@@ -162,8 +162,7 @@ Use 'arecord -l' at the command line to find out what device to use."
   "Finish recording."
   (interactive)
 	(when (derived-mode-p 'subed-mode)
-		(when (eq (subed-subtitle-msecs-stop) 0)
-			(subed-record-accept-segment)))
+    (subed-record-accept-segment t))
   (when (process-live-p subed-record-process) (quit-process subed-record-process))
 	(pcase subed-record-backend
 		('obs-old (obs-websocket-send "StopRecording"))
@@ -216,8 +215,7 @@ files are overwritten."
           (apply 'start-process "ffmpeg"
 		             (current-buffer)
 		             subed-record-ffmpeg-executable
-		             (append subed-record-ffmpeg-args (list (expand-file-name filename)) nil)))
-		(display-buffer (current-buffer))))
+		             (append subed-record-ffmpeg-args (list (expand-file-name filename)) nil)))))
 
 ;;; Using sox to record
 
@@ -237,7 +235,8 @@ files are overwritten."
 
 ;;; Working with segments
 
-(defun subed-record-accept-segment ()
+(defvar subed-record-accept-segment-hook nil "Functions to run after accepting a segment.")
+(defun subed-record-accept-segment (&optional stay-put)
   "Save the current timestamps for this segment and move to the next one."
   (interactive)
   (let ((end-time (subed-record-offset-ms)))
@@ -251,10 +250,12 @@ files are overwritten."
 									"\n")
 				"")
 			(format "#+AUDIO: %s" subed-record-filename)))
-    (when (subed-forward-subtitle-text)
-      (subed-set-subtitle-time-start end-time)
-      (subed-set-subtitle-time-stop 0)
-      (recenter))))
+    (unless stay-put
+      (when (subed-forward-subtitle-text)
+        (subed-set-subtitle-time-start end-time)
+        (subed-set-subtitle-time-stop 0)
+        (recenter)
+        (run-hooks 'subed-record-accept-segment-hook)))))
 
 (defun subed-record-retry ()
   "Try recording this segment again."
@@ -496,6 +497,11 @@ If CONTEXT is specified, copy those settings."
 								(plist-put
 								 current :same-edits
 								 (subed-record-compile--selection-audio selection))))
+        (when (and (plist-get (car selection) :options)
+									 (string-match "change-rate \\([\\.0-9]?\\)"
+                                 (or (plist-get (car selection) :options) "")))
+          (plist-put current :change-rate
+                     (string-to-number (match-string 1 (plist-get (car selection) :options)))))
         (setq current
 							(plist-put current :start-ms
 												 (when (plist-get (car selection) :visual-start)
@@ -776,13 +782,19 @@ other, and directives will be removed."
 		(when (re-search-backward "#\\+AUDIO: \\(.+\\)" nil t)
 			(match-string 1))))
 
+(defun subed-record-ensure-same-file ()
+  (unless (string= (file-truename (subed-media-file))
+                   subed-mpv-media-file)
+    (subed-mpv-play-from-file (subed-media-file))))
+
 (defun subed-record-set-up ()
 	"Add #+AUDIO as the input and turn off time boundaries."
 	(interactive)
 	(remove-hook 'subed-mpv-file-loaded-hook #'subed-mpv-pause t)
 	(remove-hook 'subed-mpv-file-loaded-hook #'subed-mpv-jump-to-current-subtitle t)
 	(setq-local subed-enforce-time-boundaries nil)
-	(add-hook 'subed-media-file-functions #'subed-record-media-file -100 t))
+	(add-hook 'subed-media-file-functions #'subed-record-media-file -100 t)
+  (add-hook 'subed-mpv-before-jump-hook #'subed-record-ensure-same-file nil t))
 
 (defun subed-record-insert-audio-source-note (&optional prefix)
 	"Add a comment setting #+AUDIO to the current media file.
