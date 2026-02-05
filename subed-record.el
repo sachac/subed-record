@@ -286,7 +286,8 @@ If nil, do not leave space for captions."
 	'(subed-record-compile-add-open-captions
 		subed-record-compile-get-visuals-from-org
 		subed-record-compile-get-audio-info
-		subed-record-compile-get-output-file-from-org)
+		subed-record-compile-get-output-file-from-org
+    subed-record-compile-get-interleaved-file-from-org)
   "Functions to run to get information over all the segments.
 Functions should accept one argument, the list of plists, and return the
 modified list of plists."
@@ -312,6 +313,25 @@ modified list of plists."
 											(setq info (plist-put info :comment val)))))
 								(unless (plist-get info :output)
 									(plist-put info :output filename)))
+							info)
+						list)))
+
+(defun subed-record-compile-get-interleaved-file-from-org (list &optional context)
+  "Interleave a file between each segment."
+	(let ((filename
+				 (plist-get context :interleaved)))
+		(mapcar (lambda (info)
+							(let ((val (plist-get info :comment)))
+								(if val
+									  (if (string-match "#\\+INTERLEAVE: \\(.+?\\)\\(\n\\|$\\)" val)
+                        (if (string= (match-string 1 val) "none")
+                            (setq filename nil)
+										      (setq filename (expand-file-name (match-string 1 val)))
+										      (setq info (plist-put info :interleaved filename))
+										      (setq val (replace-match "" nil t val))
+										      (setq info (plist-put info :comment val)))))
+                (unless (plist-get info :interleaved)
+                  (plist-put info :interleaved filename)))
 							info)
 						list)))
 
@@ -472,6 +492,44 @@ If CONTEXT is specified, copy those settings."
   (interactive "r")
   (subed-record-compile--format-tracks (subed-record-compile-get-base-selection beg end)))
 
+(defun subed-record-compile--interleave (list)
+  "Process interleaving instructions in LIST.
+Returns a new list with the :interleaved file inserted after each segment
+except the last one."
+  (if (or (null list)
+          (= (length list) 1))
+      list
+    ;; Build the interleaved list
+    (let (result
+          (durations (make-hash-table)))
+      (dotimes (i (length list))
+        (let ((segment (nth i list))
+              (next-segment (nth (1+ i) list)))
+          (push segment result)
+          (when (and
+                 next-segment
+                 (plist-get segment :interleaved)
+                 (string= (plist-get segment :interleaved)
+                          (plist-get next-segment :interleaved)))
+            (unless (gethash (plist-get segment :interleaved)
+                             durations)
+              (puthash (plist-get segment :interleaved)
+                       (compile-media-get-file-duration-ms (plist-get segment :interleaved))
+                       durations))
+            (push (list
+                   :source (plist-get segment :interleaved)
+                   :visual-file (unless (member (file-name-extension
+                                                 (plist-get segment :interleaved))
+                                                subed-audio-extensions)
+                                  (plist-get segment :interleaved))
+                   :audio-file (plist-get segment :interleaved)
+                   :start-ms 0
+                   :stop-ms (gethash (plist-get segment :interleaved)
+                                     durations)
+                   :interleaved-segment t)
+                  result))))
+      (nreverse result))))
+
 (defun subed-record-compile--selection-descriptions (selection)
 	"Return selection segments containing descriptions or open captions."
 	(let ((start-time 0))
@@ -607,13 +665,14 @@ INCLUDE should be a list of the form (video audio subtitles)."
 									(not (string=
 												(buffer-file-name)
 												(expand-file-name (concat (file-name-sans-extension (car output-group)) ".vtt")))))
-				 (subed-record-compile-subtitles (concat (file-name-sans-extension (car output-group)) ".vtt")
-																				 (cdr output-group)))
+				 (subed-record-compile-subtitles
+          (concat (file-name-sans-extension (car output-group)) ".vtt")
+					(cdr output-group)))
        (apply
         (if subed-record-sync #'compile-media-sync #'compile-media)
         (seq-filter
          (lambda (track) (member (car track) include))
-         (subed-record-compile--format-tracks (cdr output-group)))
+         (subed-record-compile--format-tracks (subed-record-compile--interleave (cdr output-group))))
         (car output-group)
         (when (and play-afterwards (not subed-record-sync))
           (list
@@ -702,6 +761,7 @@ Subtitles timestamps will be reset so one subtitle follows the
 other, and directives will be removed."
 	(interactive (list (read-file-name "Output file: ")))
 	(let ((list (or list (subed-record-compile-get-base-selection))))
+    (setq list (subed-record-compile--interleave list))
 		(with-current-buffer (find-file-noselect filename)
 			(erase-buffer)
 			(subed-auto-insert)
