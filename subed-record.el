@@ -158,6 +158,7 @@ Use 'arecord -l' at the command line to find out what device to use."
 	      (error "Failed to get output filename on StopRecord request")
 	      (setq subed-record-filename fn))))))))
 
+(defvar subed-record-finished-hook nil "Functions to run after stopping the recording.")
 (defun subed-record-stop-recording (&optional time)
   "Finish recording."
   (interactive)
@@ -212,10 +213,18 @@ files are overwritten."
   (with-current-buffer (get-buffer-create "*ffmpeg*")
     (erase-buffer)
     (setq subed-record-process
-          (apply 'start-process "ffmpeg"
-		             (current-buffer)
-		             subed-record-ffmpeg-executable
-		             (append subed-record-ffmpeg-args (list (expand-file-name filename)) nil)))))
+          (make-process
+           :name "subed-record"
+           :buffer (current-buffer)
+           :command
+           (append (list subed-record-ffmpeg-executable)
+                   subed-record-ffmpeg-args
+                   (list (expand-file-name filename))
+                   nil)
+           :sentinel
+           (lambda (process status)
+             (when (string-match "exited" status)
+               (run-hook-with-args 'subed-record-finished-hook filename)))))))
 
 ;;; Using sox to record
 
