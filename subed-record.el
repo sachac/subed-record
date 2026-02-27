@@ -25,7 +25,19 @@
 ;; subed-record makes it easier to prepare text for subtitles, record a
 ;; voiceover, and then compile a video that includes the visuals, audio,
 ;; and subtitles specified by the text file.
-;; 
+;;
+;; Directives:
+;;
+;; #+OUTPUT:
+;; #+AUDIO:
+;; #+CLOSED_CAPTIONS
+;; #+OPEN_CAPTIONS
+;; #+SKIP
+;; #+PAD_RIGHT: number of seconds
+;; #+PAD_LEFT: number of seconds
+;; #+TRIM
+;; #+INTERLEAVE
+
 ;; For more information, see README.org.
 
 (require 'compile-media)
@@ -88,6 +100,11 @@ Use 'arecord -l' at the command line to find out what device to use."
     (define-key map (kbd "RET") #'subed-record-minor-mode)
     map))
 
+(defcustom subed-record-offset-ms-from-end 100
+  "Subtract this number of milliseconds from the end timestamp to account for keypresses."
+  :type 'integer
+  :group 'subed-record)
+
 (defvar subed-record-filename nil)
 (defvar subed-record-start-time nil "Emacs timestamp from when the recording was started.")
 (defvar subed-record-process nil "Process for recording.")
@@ -113,7 +130,9 @@ Use 'arecord -l' at the command line to find out what device to use."
 								 "-"
 								 (format-time-string "%Y-%m-%d-%H%M%S")
 								 subed-record-extension))
-        (message "Recording..."))
+        (message "Recording...")
+        (subed-set-subtitle-time-start (subed-record-offset-ms)))
+
     (subed-record-stop-recording)
     (message "Stopped.")))
 
@@ -249,7 +268,7 @@ files are overwritten."
   "Save the current timestamps for this segment and move to the next one."
   (interactive)
   (let ((end-time (subed-record-offset-ms)))
-    (subed-set-subtitle-time-stop end-time)
+    (subed-set-subtitle-time-stop (- end-time subed-record-offset-ms-from-end))
 		(subed-set-subtitle-comment
 		 (concat
 			(if (subed-subtitle-comment)
@@ -420,6 +439,14 @@ If CONTEXT is specified, copy those settings."
 															(goto-char (point-min)))
 														(or (subed-record-media-file) (subed-media-file)))))
 				 (properties '((:audio-file "#\\+AUDIO: \\(.+?\\)\\(\n\\|$\\)")
+                       (:trim "#\\+TRIM: \\(.+?\\) *\\(\n\\|$\\)"
+                              (lambda (val)
+                                (save-match-data
+                                  (mapcar
+                                   (lambda (o)
+                                     (mapcar #'subed-timestamp-to-msecs
+                                             (split-string o "-")))
+                                   (split-string (match-string 1 val) ",")))))
 											 (:pad-right "#\\+PAD_RIGHT: \\(.+?\\) *\\(\n\\|$\\)"
 																	 (lambda (val)
 																		 (floor
@@ -481,11 +508,13 @@ If CONTEXT is specified, copy those settings."
 	(setq include (or include '(text audio video subtitles)))
 	(let ((text (and (member 'text include) (subed-record-compile--selection-descriptions list)))
 				(video (and (member 'video include) (subed-record-compile--selection-visuals list)))
-				(audio (and (member 'audio include) (subed-record-compile--selection-audio list))))
+				(audio (and (member 'audio include) (subed-record-compile--selection-audio list)))
+        (subtitles (and (member 'subtitles include) (subed-record-adjust-subtitle-list list))))
 		(append
 		 (when video (list (cons 'video video)))
 		 (when audio (list (cons 'audio audio)))
-		 (when text (list (cons 'text text))))))
+		 (when text (list (cons 'text text)))
+     (when subtitles (list (cons 'subtitles (list :subtitles subtitles)))))))
 
 (defun subed-record-compile-get-selection-for-region (beg end)
   "Return a `compile-media'-formatted set of tracks for the region."
@@ -660,14 +689,6 @@ INCLUDE should be a list of the form (video audio subtitles)."
 										subed-record-sync)))
     (mapc
      (lambda (output-group)
-			 (when (and (member 'subtitles include)
-									(not (plist-get (car (assoc-default 'subtitles selection)) :open-captions))
-									(not (string=
-												(buffer-file-name)
-												(expand-file-name (concat (file-name-sans-extension (car output-group)) ".vtt")))))
-				 (subed-record-compile-subtitles
-          (concat (file-name-sans-extension (car output-group)) ".vtt")
-					(cdr output-group)))
        (apply
         (if subed-record-sync #'compile-media-sync #'compile-media)
         (seq-filter
@@ -755,37 +776,43 @@ Compile the video for just that section."
 		result))
 
 ;; todo: move this to compile-media?
+(defun subed-record-adjust-subtitle-list (&optional list)
+  "Prepare subtitles for inclusion.
+Subtitle timestamps will be reset so one subtitle follows the
+other, and directives will be removed."
+  (setq list (or list (subed-record-compile-get-base-selection)))
+  (setq list (subed-record-compile--interleave list))
+  (let ((msecs 0)
+        (subed-subtitle-spacing 0))
+    (mapcar
+     (lambda (info)
+       (let ((duration
+              (+ (or (plist-get info :pad-right) 0)
+                 (or (plist-get info :pad-left) 0)
+                 (- (plist-get info :stop-ms)
+                    (plist-get info :start-ms)))))
+         (prog1
+             (list
+              nil
+              msecs
+              (+ msecs (- duration 1))
+              (plist-get info :caption)
+              (let ((comment (string-trim
+                              (replace-regexp-in-string
+															 "^#\\+.+" ""
+															 (or (plist-get info :comment) "")))))
+                (when (> (length comment) 0)
+                  comment)))
+           (setq msecs (+ msecs duration)))))
+     list)))
+
 (defun subed-record-compile-subtitles (filename &optional list)
 	"Write subtitles to FILENAME.
 Subtitles timestamps will be reset so one subtitle follows the
 other, and directives will be removed."
 	(interactive (list (read-file-name "Output file: ")))
-	(let ((list (or list (subed-record-compile-get-base-selection))))
-    (setq list (subed-record-compile--interleave list))
-		(with-current-buffer (find-file-noselect filename)
-			(erase-buffer)
-			(subed-auto-insert)
-			(let ((msecs 0)
-						(subed-subtitle-spacing 0))
-        (mapc (lambda (info)
-								(let ((duration
-											 (+ (or (plist-get info :pad-right) 0)
-													(or (plist-get info :pad-left) 0)
-													(- (plist-get info :stop-ms)
-														 (plist-get info :start-ms)))))
-									(subed-append-subtitle nil
-																				 msecs
-																				 (+ msecs (- duration 1))
-																				 (plist-get info :caption)
-																				 (let ((comment (string-trim
-																												 (replace-regexp-in-string
-																													"^#\\+.+" ""
-																													(or (plist-get info :comment) "")))))
-																					 (when (> (length comment) 0)
-																						 comment)))
-									(setq msecs (+ msecs duration))))
-              list))
-			(save-buffer)))
+  (setq list (or list (subed-record-compile-get-base-selection)))
+	(subed-create-file filename (subed-record-adjust-subtitle-list list) t)
 	filename)
 
 (defun subed-record-compile-test-visuals (&optional limit)
@@ -856,6 +883,7 @@ other, and directives will be removed."
                    subed-mpv-media-file)
     (subed-mpv-play-from-file (subed-media-file))))
 
+;;;###autoload
 (defun subed-record-set-up ()
 	"Add #+AUDIO as the input and turn off time boundaries."
 	(interactive)
@@ -936,8 +964,32 @@ Call with a prefix argument in order to set it to the MPV
 														(or (plist-get o :start-ms) 0))))
 											selection))))
 		(when (called-interactively-p)
-			(message "%s" (subed-msecs-to-timestamp sum)))
+			(message "%s" (subed-msecs-to-timestamp sum))
+      (kill-new (subed-msecs-to-timestamp sum)))
 		sum))
+
+(defun subed-record-toggle-skip (&optional beg end)
+  "Toggle the skip status of the current subtitle.
+If a region is active, toggle the skip status of the subtitles in the region."
+  (interactive (when (region-active-p)
+                 (list (region-beginning)
+                       (region-end))))
+  (let ((do-skip (not (string-match "#\\+SKIP" (save-excursion (when beg (goto-char beg)) (or (subed-subtitle-comment) ""))))))
+    (save-excursion
+      (if beg
+          (subed-for-each-subtitle beg end t
+            (let ((new-comment
+                   (string-trim (concat (string-trim (replace-regexp-in-string "^#\\+SKIP\n?" "" (or (subed-subtitle-comment) "")))
+                                        (if do-skip "\n#+SKIP" "")))))
+              (subed-set-subtitle-comment
+               (unless (string= new-comment "")
+                 new-comment))))
+        (let ((new-comment
+               (string-trim (concat (string-trim (replace-regexp-in-string "^#\\+SKIP\n?" "" (or (subed-subtitle-comment) "")))
+                                    (if do-skip "\n#+SKIP" "")))))
+              (subed-set-subtitle-comment
+               (unless (string= new-comment "")
+                 new-comment)))))))
 
 ;; (subed-record-parse-attributes ":bg \"&H66000000\" :font-name \"sachacHand\"")
 (provide 'subed-record)
