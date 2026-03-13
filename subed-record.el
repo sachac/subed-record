@@ -35,7 +35,9 @@
 ;; #+SKIP
 ;; #+PAD_RIGHT: number of seconds
 ;; #+PAD_LEFT: number of seconds
-;; #+TRIM
+;; #+TRIM: hh:mm:ss.MMM-hh:mm:ss.MMM,hh:mm:ss.MMM-hh:mm:ss.MMM
+;; or #+TRIM: hh:mm:ss.MMM --> hh:mm:ss.MMM, hh:mm:ss.MMM --> hh:mm:ss.MMM
+
 ;; #+INTERLEAVE
 
 ;; For more information, see README.org.
@@ -445,8 +447,10 @@ If CONTEXT is specified, copy those settings."
                                   (mapcar
                                    (lambda (o)
                                      (mapcar #'subed-timestamp-to-msecs
-                                             (split-string o "-")))
-                                   (split-string (match-string 1 val) ",")))))
+                                             (split-string
+                                              o
+                                              (if (string-match " *--> *" o) " *--> *" "-"))))
+                                   (split-string (match-string 1 val) ", *")))))
 											 (:pad-right "#\\+PAD_RIGHT: \\(.+?\\) *\\(\n\\|$\\)"
 																	 (lambda (val)
 																		 (floor
