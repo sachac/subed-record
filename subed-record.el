@@ -92,15 +92,15 @@ Use 'arecord -l' at the command line to find out what device to use."
   :type '(repeat string)
   :group 'subed-record)
 
-(defvar subed-record-minor-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map [up] #'subed-backward-subtitle-text)
-    (define-key map [down] #'subed-forward-subtitle-text)
-    (define-key map [left] #'subed-record-retry)
-    (define-key map [right] #'subed-record-accept-segment)
-    (define-key map [q] #'subed-record-minor-mode)
-    (define-key map (kbd "RET") #'subed-record-minor-mode)
-    map))
+(defvar-keymap subed-record-map
+  "<up>" #'subed-backward-subtitle-text
+  "<down>" #'subed-forward-subtitle-text
+  "<left>" #'subed-record-start-segment
+  "S-<left>" #'subed-record-copy-and-retry
+  "c" #'subed-record-copy-and-retry
+  "<right>" #'subed-record-accept-segment
+  "q" #'subed-record-stop-recording
+  "RET" #'subed-record-accept-and-stop)
 
 (defcustom subed-record-offset-ms-from-end 100
   "Subtract this number of milliseconds from the end timestamp to account for keypresses."
@@ -116,54 +116,64 @@ Use 'arecord -l' at the command line to find out what device to use."
 
 ;;;###autoload
 (defun subed-record ()
-  "Turn on subed-record-minor-mode."
+  "Start recording segments."
   (interactive)
-	(setq-local subed-enforce-time-boundaries nil)
-  (subed-record-minor-mode 1))
+  (unless (derived-mode-p 'subed-mode)
+    (error "Not in `subed-mode' buffer."))
+  (subed-record-set-up)
+  (subed-record-start-recording))
 
-;;;###autoload
-(define-minor-mode subed-record-minor-mode
-  "Minor mode for recording segments using the subtitles in the buffer."
-  :lighter " REC"
-  (if subed-record-minor-mode
-      (progn
-        (subed-record-start-recording
-				 (concat (file-name-sans-extension (buffer-file-name))
-								 "-"
-								 (format-time-string "%Y-%m-%d-%H%M%S")
-								 subed-record-extension))
-        (message "Recording...")
-        (subed-set-subtitle-time-start (subed-record-offset-ms)))
+(defvar subed-record-start-segment-hook nil
+  "Functions to run when starting a segment.")
 
-    (subed-record-stop-recording)
-    (message "Stopped.")))
+(defalias 'subed-record-retry #'subed-record-start-segment)
+(defun subed-record-start-segment ()
+  "Start a recording segment."
+  (interactive)
+  (subed-set-subtitle-time-start (subed-record-offset-ms))
+  (subed-set-subtitle-time-stop 0)
+  (recenter)
+  (run-hooks 'subed-record-start-segment-hook))
 
-(defun subed-record-start-recording (filename)
+(defun subed-record-start-recording (&optional filename)
   "Start recording. Save results to FILENAME."
-  (interactive (list (if (or current-prefix-arg (not (subed-media-file)))
-                         (read-file-name "File: ")
-                       (subed-media-file))))
+  (interactive (list (when current-prefix-arg
+                         (read-file-name "File: "))))
+  (setq filename
+        (or filename
+            (concat (file-name-sans-extension (buffer-file-name))
+								    "-"
+								    (format-time-string "%Y-%m-%d-%H%M%S")
+								    subed-record-extension)))
   (setq subed-record-filename filename)
   (setq subed-record-start-time (current-time))
   (if (process-live-p subed-record-process)
       (quit-process subed-record-process))
   (pcase subed-record-backend
-   ('obs-old
-    (when (not (websocket-openp obs-websocket))
-      (obs-websocket-connect))
-    (obs-websocket-send "SetRecordingFolder" :rec-folder (expand-file-name (file-name-directory filename)))
-    (obs-websocket-send "SetFilenameFormatting" :filename-formatting (file-name-nondirectory filename))
-    (obs-websocket-send "StartRecording"))
-   ('obs
-    (when (not (websocket-openp obs-websocket))
-      (obs-websocket-connect))
-		;; filename is ignored. StopRecord will set filename
-    (obs-websocket-send "GetRecordDirectory")
-    (obs-websocket-send "StartRecord"))
-   ('ffmpeg
-    (subed-record-ffmpeg-start filename))
-   ('sox
-    (subed-record-sox-start filename))))
+    ('obs-old
+     (when (not (websocket-openp obs-websocket))
+       (obs-websocket-connect))
+     (obs-websocket-send "SetRecordingFolder" :rec-folder (expand-file-name (file-name-directory filename)))
+     (obs-websocket-send "SetFilenameFormatting" :filename-formatting (file-name-nondirectory filename))
+     (obs-websocket-send "StartRecording"))
+    ('obs
+     (when (not (websocket-openp obs-websocket))
+       (obs-websocket-connect))
+		 ;; filename is ignored. StopRecord will set filename
+     (obs-websocket-send "GetRecordDirectory")
+     (obs-websocket-send "StartRecord"))
+    ('ffmpeg
+     (subed-record-ffmpeg-start filename))
+    ('sox
+     (subed-record-sox-start filename)))
+  (message "Recording...")
+  (set-transient-map
+   subed-record-map
+   (lambda ()
+     (and (not (memq this-command '(subed-record-stop-recording
+                                    subed-record-accept-and-stop)))
+          (lookup-key subed-record-map (this-command-keys)))))
+  (subed-record-start-segment))
 
 (defun subed-record-offset-ms (&optional time)
   "Milliseconds since the start of recording."
@@ -183,8 +193,6 @@ Use 'arecord -l' at the command line to find out what device to use."
 (defun subed-record-stop-recording (&optional time)
   "Finish recording."
   (interactive)
-	(when (derived-mode-p 'subed-mode)
-    (subed-record-accept-segment t))
   (when (process-live-p subed-record-process) (quit-process subed-record-process))
 	(pcase subed-record-backend
 		('obs-old (obs-websocket-send "StopRecording"))
@@ -281,17 +289,22 @@ files are overwritten."
 				"")
 			(format "#+AUDIO: %s" subed-record-filename)))
     (unless stay-put
+      (run-hooks 'subed-record-accept-segment-hook)
       (when (subed-forward-subtitle-text)
-        (subed-set-subtitle-time-start end-time)
-        (subed-set-subtitle-time-stop 0)
-        (recenter)
-        (run-hooks 'subed-record-accept-segment-hook)))))
+        (subed-record-start-segment)))))
 
-(defun subed-record-retry ()
-  "Try recording this segment again."
+(defun subed-record-copy-and-retry ()
+  "Duplicate this segment and start a new take."
   (interactive)
-  (subed-set-subtitle-time-start (subed-record-offset-ms))
-  (subed-set-subtitle-time-stop 0))
+  (subed-record-accept-segment t)
+  (subed-append-subtitle nil nil nil (subed-subtitle-text))
+  (subed-record-start-segment))
+
+(defun subed-record-accept-and-stop ()
+  "Accept this segment and stop recording."
+  (interactive)
+  (subed-record-accept-segment t)
+  (subed-record-stop-recording))
 
 ;;; Compiling
 
@@ -653,6 +666,23 @@ Returns an audio track."
 				(subed-record-compile-audio beg end t (lambda ()
 																		(delete-file subed-record-override-output-filename)))))))
 
+(defun subed-record-play-output (&optional beg end)
+  "Play the output file(s)."
+  (interactive (if (region-active-p)
+                   (list (region-beginning)
+                         (region-end))
+                 (list (point-min) (point-max))))
+  (let ((output-files
+         (mapcar
+          (lambda (o)
+            (expand-file-name (car o)))
+          (subed-record-compile-group-by-output-file (subed-record-compile-get-base-selection
+                                          (or beg (point-min))
+                                          (or end (point-max)))))))
+    (make-process :name "subed-record"
+                  :command (cons "mpv"
+                                 output-files))))
+
 (defun subed-record-compile-group-by-output-file (list)
   "Return a list of ((output-filename sub sub sub) (output-filename sub sub sub))."
 	(reverse (seq-group-by (lambda (o) (plist-get o :output)) list))
@@ -897,21 +927,24 @@ other, and directives will be removed."
 	(add-hook 'subed-media-file-functions #'subed-record-media-file -100 t)
   (add-hook 'subed-mpv-before-jump-hook #'subed-record-ensure-same-file nil t))
 
-(defun subed-record-insert-audio-source-note (&optional prefix)
+(defun subed-record-insert-audio-source-note (&optional beg end prefix)
 	"Add a comment setting #+AUDIO to the current media file.
 Call with a prefix argument in order to set it to the MPV
 #+AUDIO file."
-	(interactive "p")
-	(let ((comment (string-trim (or (subed-subtitle-comment) ""))))
-		(subed-set-subtitle-comment
-		 (concat comment
-						 (if (string= comment "") "" "\n")
-						 "#+AUDIO: "
-						 (file-relative-name
-							(if prefix
-									(or (subed-record-media-file) (subed-media-file))
-								subed-mpv-media-file))
-						 "\n\n"))))
+	(interactive
+   (if (region-active-p)
+       (list (region-beginning)
+             (region-end)
+             current-prefix-arg)
+     (list nil nil current-prefix-arg)))
+  (let ((file (expand-file-name
+               (if prefix
+			             (or (subed-record-media-file) (subed-media-file))
+		             subed-mpv-media-file))))
+    (if (and beg end)
+        (subed-for-each-subtitle beg end t
+          (subed-record-set-directive "#+AUDIO" file))
+      (subed-record-set-directive "#+AUDIO" file))))
 
 (defun subed-record-copy-assets-to-directory-and-rewrite (destination-dir)
 	"Copy all the visual and audio assets to a specified directory."
@@ -972,6 +1005,29 @@ Call with a prefix argument in order to set it to the MPV
       (kill-new (subed-msecs-to-timestamp sum)))
 		sum))
 
+(defun subed-record-get-directive (prop &optional from-comment)
+  "Return the value of PROP in the comments.
+PROP should be a string like \"#+REFERENCE\"."
+  (let ((comment (or from-comment (subed-subtitle-comment) "")))
+    (when (string-match (concat (regexp-quote prop) "\\(?:\\(?:: \\)?\\(.*\\)\\)?\\(\n\\|$\\)") comment)
+      (match-string 1 comment))))
+
+(defun subed-record-set-directive (prop new-value &optional from-comment)
+  "Set PROP to NEW-VALUE, or remove it if nil.
+PROP should be a string like \"#+REFERENCE\"."
+  (interactive (list (read-string "Directive: ") (read-string "Value: ")))
+  (let ((comment (or from-comment (subed-subtitle-comment) "")))
+    (cond
+     ((string-match (concat (regexp-quote prop) "\\(: *.*\\)?\\(\n\\|$\\)") comment)
+      (setq comment (if new-value
+                        (replace-match (concat ": " new-value) t t comment 1)
+                      (replace-match "" nil nil comment))))
+     (new-value
+      (setq comment (string-trim (concat (string-trim comment) "\n" prop ": " new-value)))))
+    (unless from-comment
+      (subed-set-subtitle-comment comment))
+    comment))
+
 (defun subed-record-toggle-skip (&optional beg end)
   "Toggle the skip status of the current subtitle.
 If a region is active, toggle the skip status of the subtitles in the region."
@@ -991,11 +1047,165 @@ If a region is active, toggle the skip status of the subtitles in the region."
         (let ((new-comment
                (string-trim (concat (string-trim (replace-regexp-in-string "^#\\+SKIP\n?" "" (or (subed-subtitle-comment) "")))
                                     (if do-skip "\n#+SKIP" "")))))
-              (subed-set-subtitle-comment
-               (unless (string= new-comment "")
-                 new-comment)))))))
+          (subed-set-subtitle-comment
+           (unless (string= new-comment "")
+             new-comment)))))))
 
-;; (subed-record-parse-attributes ":bg \"&H66000000\" :font-name \"sachacHand\"")
+(defun subed-record-format-approximate-matches-as-subtitles (results)
+  "Reorganize RESULTS into the format expected by subed."
+  (mapcar
+   (lambda (o)
+     (list nil
+           (alist-get 'start o)
+           (alist-get 'end o)
+           (or (alist-get 'target o) (allist-get 'text))
+           (when (alist-get 'window-string o) (format "#+ACTUAL: %s" (alist-get 'window-string o)))))
+   results))
+
+(defun subed-record-extract-all-approximately-matching-phrases (phrase-list
+                                                    word-data-file
+                                                    &optional
+                                                    output-file
+                                                    fuzz-before fuzz-after)
+  "Fuzzy-match PHRASE-LIST against WORD-DATA-FILE and return a list of subtitles..
+This implements a sliding window search similar to the Python phrase-search.py,
+using normalization and similarity functions from subed-word-data.el."
+  (interactive (list (split-string
+                      (if (region-active-p)
+                          (buffer-substring
+                           (region-beginning)
+                           (region-end))
+                        (read-string "Phrases (one per line): "))
+                      "\n" t)
+                     (read-file-name "Word timing data: ")
+                     (read-file-name "Output file: ")))
+  (setq fuzz-before (or fuzz-before -3))
+  (setq fuzz-after (or fuzz-after 5))
+  (let* ((json-object-type 'alist)
+         (json-array-type 'list)
+         (all-words (if (listp word-data-file) word-data-file (subed-word-data-parse-file word-data-file)))
+         (all-words-len (length all-words))
+         results
+         subtitles)
+    (dolist (phrase phrase-list)
+      (let* ((target-words (string-trim phrase))
+             (target-string-length (length target-words))
+             (target-word-count (length (split-string target-words " "))))
+        (dotimes (i (length all-words))
+          (let ((best-score 1.0)
+                best-window)
+            (cl-loop
+             for flex from fuzz-before to (min (- all-words-len i) fuzz-after)
+             do
+             (let ((current-len (+ target-word-count flex)))
+               (when (> current-len 0)
+                 (let* ((window (seq-subseq all-words i (min all-words-len (+ i current-len))))
+                        (window-string (string-join (mapcar (lambda (o) (alist-get 'text o)) window) " "))
+                        (window-score (/ (string-distance window-string target-words)
+                                         (* 1.0 (max (length window-string)
+                                                     target-string-length)))))
+                   (when (and (< window-score subed-word-data-compare-normalized-string-distance-threshold)
+                              (< window-score best-score))
+                     (setq best-score window-score)
+                     (setq best-window `((start . ,(floor (alist-get 'start (car window))))
+                                         (end . ,(floor (alist-get 'end (car (last window)))))
+                                         (window . ,window)
+                                         (score . ,window-score)
+                                         (window-string . ,window-string)
+                                         (target . ,target-words))))))))
+            (when best-window
+              ;; Possibly overlapping, compare scores
+              (if (and (eq (alist-get 'end (car results))
+                           (alist-get 'end best-window)))
+                  (when (< (alist-get 'score best-window)
+                           (alist-get 'score (car results)))
+                    (setf (car results) best-window))
+                (push best-window results)))))))
+    (setq results (nreverse results))
+    (setq subtitles (subed-record-format-approximate-matches-as-subtitles results))
+    (let ((media-file (subed-guess-media-file nil word-data-file)))
+      (mapc (lambda (o)
+              (setf (elt o 4)
+                    (subed-record-set-directive "#+AUDIO" media-file (or (elt o 4) ""))))
+            subtitles))
+    (cond
+     ((stringp output-file)
+      (subed-create-file output-file subtitles))
+     ((eq output-file t) subtitles)
+     (t results))))
+
+(defun subed-record-extract-last-phrases (phrase-list
+                              word-data-file
+                              output-file
+                              &optional fuzz-before fuzz-after)
+  "Fuzzy-match PHRASE-LIST against WORD-DATA-FILE and return a list of subtitles..
+This implements a sliding window search similar to the Python phrase-search.py,
+using normalization and similarity functions from subed-word-data.el."
+  (interactive (list (split-string
+                      (if (region-active-p)
+                          (buffer-substring
+                           (region-beginning)
+                           (region-end))
+                        (read-string "Phrases (one per line): "))
+                      "\n" t)
+                     (read-file-name "Word timing data: ")
+                     (read-file-name "Output file: ")))
+  (let* ((data
+          (subed-record-extract-all-approximately-matching-phrases
+           phrase-list word-data-file nil fuzz-before fuzz-after))
+         (grouped (seq-group-by (lambda (o) (alist-get 'target o))
+                                data))
+         (last (mapcar (lambda (o) (car (last (cdr o))))
+                       grouped))
+         (subtitles (subed-record-format-approximate-matches-as-subtitles last)))
+    (cond
+     ((stringp output-file)
+      (subed-create-file output-file subtitles))
+     ((eq output-file t) subtitles)
+     (t last))))
+
+(defvar subed-record-extract-audio-args '("-ac" "1")
+  "Extra arguments to pass to ffmpeg.")
+(defvar subed-record-extract-audio-rate 16000
+  "Audio rate for clips.")
+
+(defun subed-record-extract-audio-for-current-subtitle-to-file (output-file &optional sub)
+  "Save the audio for the current subtitle to OUTPUT-FILE."
+  (interactive (list (read-file-name "Output file: ")))
+    (if sub
+        (with-temp-buffer
+          (subed-vtt-mode)
+          (insert "WEBVTT\n\n")
+          (subed-append-subtitle-list (list sub))
+          (subed-record-extract-audio-for-current-subtitle-to-file output-file))
+      (let* ((subed-record-override-output-filename (expand-file-name output-file))
+             (compile-media-ffmpeg-audio-rate subed-record-extract-audio-rate)
+             (compile-media-ffmpeg-arguments subed-record-extract-audio-args)
+             (sub-beg (subed-subtitle-start-pos))
+             (sub-end (save-excursion
+                        (subed-jump-to-subtitle-end)
+                        (point))))
+        (subed-record-compile-audio sub-beg sub-end))))
+
+(defun subed-record-insert-file (input-file)
+  "Add INPUT-FILE at point."
+  (interactive (list (read-file-name "Media file: ")))
+  (let* ((caption-file (concat (file-name-sans-extension input-file)
+                               ".vtt"))
+         (captions (and (file-exists-p caption-file)
+                        (subed-parse-file caption-file))))
+    (if captions
+        (save-restriction
+          (narrow-to-region (point) (point))
+          (subed-append-subtitle-list captions)
+          (goto-char (point-min))
+          (subed-record-set-directive "#+AUDIO" (expand-file-name input-file)))
+      (subed-append-subtitle
+       nil 0
+       (compile-media-get-file-duration-ms (expand-file-name input-file))
+       "")
+      (subed-record-set-directive "#+AUDIO" (expand-file-name input-file)))))
+
 (provide 'subed-record)
 
 ;;; subed-record.el ends here
