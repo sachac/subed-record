@@ -1093,6 +1093,62 @@ If a region is active, toggle the skip status of the subtitles in the region."
            (unless (string= new-comment "")
              new-comment)))))))
 
+;;;###autoload
+(defun subed-record-filter-skips (subtitles)
+  "Return SUBTITLES without the skipped ones."
+  (seq-remove (lambda (o)
+                (subed-record-get-directive "#+SKIP" (or (elt o 4) "")))
+              subtitles))
+
+;; Probably should hook this into subed-word-data-normalizing-functions instead someday
+
+;;;###autoload
+(defun subed-record-simplify (s)
+  "Prepare text for synthesis or comparison.
+Remove speaker tags and some punctuation."
+  (string-trim
+   (replace-regexp-in-string
+    "^\\[[^]]+\\]: "
+    ""
+    (replace-regexp-in-string
+     "  +" " "
+     (replace-regexp-in-string
+      "^- \\(\\.\\.\\. \\)?\\|^\\*+ \\|{.+?}\\|*" ""
+      s)))))
+
+(defun subed-record-group-by-with-test (key-fn seq &optional test-fn)
+  "Group SEQ by KEY-FN, using TEST-FN to compare keys.
+This uses `identity' and `equal' by default."
+  (let (groups)
+    (setq key-fn (or key-fn 'identity))
+    (setq test-fn (or test-fn 'equal))
+    (mapc
+     (lambda (item)
+       (let* ((key (funcall key-fn item))
+              (group (assoc key groups test-fn)))
+         (if group
+             (setcdr group (cons item (cdr group)))
+           (push (list key item) groups))))
+     seq)
+    (mapcar (lambda (group)
+              (cons (car group) (nreverse (cdr group))))
+            (nreverse groups))))
+
+(defun subed-record-keep-last (subtitles &optional simplify-fn compare-fn)
+  "Return only the last instance of each item in SUBTITLES.
+Simplify text and use approximate matches by default,
+or use SIMPLIFY-FN and/or COMPARE-FN if specified.
+
+Use `subed-record-filter-skips' before this step to focus on subtitles
+you want to keep."
+  (mapcar
+   (lambda (group) (car (last group)))
+   (subed-record-group-by-with-test
+    (lambda (o) (funcall (or simplify-fn 'subed-record-simplify) (elt o 3)))
+    subtitles
+    (or compare-fn
+        #'subed-word-data-compare-normalized-string-distance))))
+
 (defun subed-record-format-approximate-matches-as-subtitles (results)
   "Reorganize RESULTS into the format expected by subed."
   (mapcar
@@ -1109,9 +1165,7 @@ If a region is active, toggle the skip status of the subtitles in the region."
                                                     &optional
                                                     output-file
                                                     fuzz-before fuzz-after)
-  "Fuzzy-match PHRASE-LIST against WORD-DATA-FILE and return a list of subtitles..
-This implements a sliding window search similar to the Python phrase-search.py,
-using normalization and similarity functions from subed-word-data.el."
+  "Fuzzy-match PHRASE-LIST against WORD-DATA-FILE and return a list of subtitles."
   (interactive (list (split-string
                       (if (region-active-p)
                           (buffer-substring
