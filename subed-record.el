@@ -43,6 +43,8 @@
 ;; For more information, see README.org.
 
 (require 'compile-media)
+(require 'subed)
+(require 'subed-word-data)
 
 ;;; Code:
 
@@ -444,6 +446,50 @@ INFO should be a single cue."
 		(cdr list)
 		(list (car list)))))
 
+(defun subed-record-get-trim-info (value)
+  "Parse trim information out of VALUE.
+Return a list of ((start-msecs stop-msecs) (start-msecs stop-msecs) ...).
+You can get the value with `subed-record-get-directive'."
+  (mapcar
+   (lambda (o)
+     (mapcar #'subed-timestamp-to-msecs
+             (split-string
+              o
+              (if (string-match " *--> *" o) " *--> *" "-"))))
+   (split-string value ", *")))
+
+(declare-function subed-waveform--update-overlay-svg "subed-waveform")
+
+(defun subed-record-show-trims-in-waveform (overlay)
+  "Show trimmed-away areas as translucent gray rectangles in OVERLAY.
+Intended for use in `subed-waveform-make-overlay-hook'.
+Read the #+TRIM directive from the current subtitle comment and
+shade the portions of the waveform not covered by any trim interval."
+  (let* ((comment (subed-subtitle-comment))
+         (trim-value (subed-record-get-directive "#+TRIM" comment))
+         (waveform-start (overlay-get overlay 'waveform-start))
+         (waveform-stop (overlay-get overlay 'waveform-stop))
+         (trim-intervals (if (subed-record-get-directive "#+SKIP" comment)
+                             (list (list waveform-start waveform-stop))
+                           (and trim-value (subed-record-get-trim-info trim-value))))
+         (svg (get-text-property 0 'svg (overlay-get overlay 'before-string))))
+    (when (and trim-intervals svg waveform-start waveform-stop)
+          (let ((pos waveform-start)
+                (total (float (- waveform-stop waveform-start)))
+                (sorted (sort (copy-sequence trim-intervals)
+                              (lambda (a b) (< (car a) (car b))))))
+            (dolist (interval sorted)
+              (let ((gap-start (max (car interval) waveform-start))
+                    (gap-end (min (cadr interval) waveform-stop)))
+                (svg-rectangle svg
+                               (format "%.2f%%" (* 100.0 (/ (- gap-start waveform-start) total)))
+                               "0%"
+                               (format "%.2f%%" (* 100.0 (/ (- gap-end gap-start) total)))
+                               "100%"
+                               :fill "lightgray" :fill-opacity "0.3"
+                               :class "trimmed"))
+              (setq pos (max pos (cadr interval))))))))
+
 (defun subed-record-compile-get-audio-info (list &optional context)
   "Get the audio file or current media file.
 If CONTEXT is specified, copy those settings."
@@ -456,14 +502,7 @@ If CONTEXT is specified, copy those settings."
 				 (properties '((:audio-file "#\\+AUDIO: \\(.+?\\)\\(\n\\|$\\)")
                        (:trim "#\\+TRIM: \\(.+?\\) *\\(\n\\|$\\)"
                               (lambda (val)
-                                (save-match-data
-                                  (mapcar
-                                   (lambda (o)
-                                     (mapcar #'subed-timestamp-to-msecs
-                                             (split-string
-                                              o
-                                              (if (string-match " *--> *" o) " *--> *" "-"))))
-                                   (split-string (match-string 1 val) ", *")))))
+                                (subed-record-get-trim-info (match-string 1 val))))
 											 (:pad-right "#\\+PAD_RIGHT: \\(.+?\\) *\\(\n\\|$\\)"
 																	 (lambda (val)
 																		 (floor
@@ -926,6 +965,9 @@ other, and directives will be removed."
 	(setq-local subed-enforce-time-boundaries nil)
 	(add-hook 'subed-media-file-functions #'subed-record-media-file -100 t)
   (add-hook 'subed-mpv-before-jump-hook #'subed-record-ensure-same-file nil t))
+
+(with-eval-after-load 'subed-waveform
+  (add-hook 'subed-waveform-make-overlay-hook #'subed-record-show-trims-in-waveform))
 
 (defun subed-record-insert-audio-source-note (&optional beg end prefix)
 	"Add a comment setting #+AUDIO to the current media file.
