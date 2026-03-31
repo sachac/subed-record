@@ -1204,6 +1204,7 @@ you want to keep."
            (when (alist-get 'window-string o) (format "#+ACTUAL: %s" (alist-get 'window-string o)))))
    results))
 
+;;;###autoload
 (defun subed-record-extract-all-approximately-matching-phrases (phrase-list
                                                     word-data-file
                                                     &optional
