@@ -281,6 +281,8 @@ files are overwritten."
 ;;; Working with segments
 
 (defvar subed-record-accept-segment-hook nil "Functions to run after accepting a segment.")
+(defvar subed-record-moved-forward-hook nil "Functions to run after accepting a segment and moving forward.
+Point is in the new segment.")
 (defun subed-record-accept-segment (&optional stay-put)
   "Save the current timestamps for this segment and move to the next one."
   (interactive)
@@ -298,6 +300,7 @@ files are overwritten."
     (unless stay-put
       (run-hooks 'subed-record-accept-segment-hook)
       (when (subed-forward-subtitle-text)
+        (run-hooks subed-record-moved-forward-hook)
         (subed-record-start-segment)))))
 
 (defun subed-record-copy-and-retry ()
