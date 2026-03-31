@@ -196,9 +196,14 @@ Use 'arecord -l' at the command line to find out what device to use."
   "Finish recording."
   (interactive)
   (when (process-live-p subed-record-process) (quit-process subed-record-process))
+  (setq subed-record-start-time nil)
 	(pcase subed-record-backend
 		('obs-old (obs-websocket-send "StopRecording"))
 		('obs (obs-websocket-send "StopRecord" #'subed-record-get-filename-from-obs-stop-record-callback))))
+
+(defun subed-record-is-recording-p ()
+  "Return non-nil if we are currently recording."
+  subed-record-start-time)
 
 ;;; Converting from Org
 
