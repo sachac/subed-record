@@ -1081,6 +1081,8 @@ Call with a prefix argument in order to set it to the MPV
 (defun subed-record-get-directive (prop &optional from-comment)
   "Return the value of PROP in the comments.
 PROP should be a string like \"#+REFERENCE\"."
+  (when (and from-comment (listp from-comment))
+    (setq from-comment (elt from-comment 4)))
   (let ((comment (or from-comment (subed-subtitle-comment) "")))
     (when (string-match (concat (regexp-quote prop) "\\(?:\\(?:: \\)?\\(.*\\)\\)?\\(\n\\|$\\)") comment)
       (match-string 1 comment))))
@@ -1130,6 +1132,17 @@ If a region is active, toggle the skip status of the subtitles in the region."
   (seq-remove (lambda (o)
                 (subed-record-get-directive "#+SKIP" (or (elt o 4) "")))
               subtitles))
+
+(defun subed-record-filter-for-directive (directive subtitles &optional match)
+  "Return SUBTITLES that have DIRECTIVE.
+If MATCH is specified, the directive value should match the regular
+expression."
+  (seq-filter
+   (lambda (o)
+     (if match
+         (string-match match (or (subed-record-get-directive directive (or (elt o 4) "")) ""))
+       (subed-record-get-directive directive (or (elt o 4) ""))))
+   subtitles))
 
 ;; Probably should hook this into subed-word-data-normalizing-functions instead someday
 
@@ -1364,6 +1377,33 @@ using normalization and similarity functions from subed-word-data.el."
        (compile-media-get-file-duration-ms (expand-file-name input-file))
        "")
       (subed-record-set-directive "#+AUDIO" (expand-file-name input-file)))))
+
+(defun subed-record-sort-by-directive (directive &optional beg end)
+  "Sort subtitles by DIRECTIVE.
+DIRECTIVE could be a string like \"SCORE\" or a function that takes a and b.
+BEG could be a list of subtitles."
+  (interactive (list (read-string "Directive (ex: SCORE): ")
+                     (if (region-active-p) (region-beginning) (point-min))
+                     (if (region-active-p) (region-end) (point-max))))
+  (let* ((list (if (listp beg) beg (subed-subtitle-list beg end)))
+         (sorted
+          (cond
+           ((stringp directive)
+            (sort list
+                  :key
+                  (lambda (o)
+                    (or (subed-record-get-directive
+                         (if (string-match "^#" directive)
+                             directive
+                           (concat "#+" directive))
+                         (elt o 4))
+                        ""))))
+           ((functionp directive)
+            (sort list :lessp directive)))))
+    (if (listp beg)
+        sorted
+      (delete-region beg end)
+      (subed-append-subtitle-list sorted))))
 
 (provide 'subed-record)
 
