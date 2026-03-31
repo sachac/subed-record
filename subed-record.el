@@ -1291,6 +1291,38 @@ using normalization and similarity functions from subed-word-data.el."
      ((eq output-file t) subtitles)
      (t last))))
 
+(defun subed-record-extract-words (word word-data-file output-file)
+  "Extract words matching WORD from WORD-DATA-FILE and write to OUTPUT-FILE."
+  (let ((media-file (subed-guess-media-file nil word-data-file)))
+    (subed-create-file
+     output-file
+     (mapcar (lambda (o)
+               (list nil
+                     (alist-get 'start o)
+                     (alist-get 'end o)
+                     (alist-get 'text o)
+                     (string-join
+                      (delq nil
+                            (list
+                             (and media-file (format "#+AUDIO: %s" media-file))
+                             (and (alist-get 'score o)
+                                  (format "#+WHISPER_SCORE: %d" (* (alist-get 'score o) 100)))
+                             (and (alist-get 'speaker o)
+                                  (format "#+SPEAKER: %s" (alist-get 'speaker o)))))
+                      "\n")))
+             (sort
+              (seq-filter
+               (lambda (o)
+                 (subed-word-data-compare-normalized-string-distance
+                  word
+                  (alist-get 'text o)))
+               (subed-word-data-parse-file
+                word-data-file))
+              :key (lambda (o) (alist-get 'score o))
+              :reverse t))
+     t)))
+
+
 (defvar subed-record-extract-audio-args '("-ac" "1")
   "Extra arguments to pass to ffmpeg.")
 (defvar subed-record-extract-audio-rate 16000
