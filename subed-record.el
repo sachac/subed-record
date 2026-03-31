@@ -788,6 +788,29 @@ INCLUDE should be a list of the form (video audio subtitles)."
 				 (mpv-play (car output-group))))
      output-groups)))
 
+(defun subed-record-compile-subtitle-list (subtitles output-file &optional include context)
+  "Compile SUBTITLES into OUTPUT-FILE.
+INCLUDE should be a list of the form (video audio subtitles).
+CONTEXT can be a plist that sets up the context (ex: :interleave)."
+  (setq include (or include '(video audio subtitles)))
+  (let* ((subed-record-override-output-filename output-file)
+         (selection (subed-record-compile--process-selection
+                     subtitles
+                     (if (stringp context)
+                         (list nil 0 0 context)
+                       context)))
+         (output-groups (subed-record-compile-group-by-output-file selection)))
+    (mapc
+     (lambda (output-group)
+       (funcall
+        #'compile-media-sync
+        (seq-filter
+         (lambda (track) (member (car track) include))
+         (subed-record-compile--format-tracks (subed-record-compile--interleave (cdr output-group))))
+        (car output-group)))
+     output-groups)
+    output-groups))
+
 (defun subed-record-section ()
 	"Return the start and end of the current section.
 The current section is defined by #+OUTPUT commands."
