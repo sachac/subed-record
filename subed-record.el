@@ -998,7 +998,9 @@ other, and directives will be removed."
   (add-hook 'subed-mpv-before-jump-hook #'subed-record-ensure-same-file nil t))
 
 (with-eval-after-load 'subed-waveform
-  (add-hook 'subed-waveform-make-overlay-hook #'subed-record-show-trims-in-waveform))
+  (define-key subed-waveform-svg-map [drag-mouse-1] #'subed-record-waveform-trim)
+	(add-hook 'subed-waveform-make-overlay-hook #'subed-record-show-trims-in-waveform))
+
 
 (defun subed-record-insert-audio-source-note (&optional beg end prefix)
 	"Add a comment setting #+AUDIO to the current media file.
@@ -1405,6 +1407,26 @@ BEG could be a list of subtitles."
         sorted
       (delete-region beg end)
       (subed-append-subtitle-list sorted))))
+
+;;;###autoload
+(defun subed-record-waveform-trim (event)
+  "Set the trim directive to remove the times indicated."
+  (interactive "e")
+	(subed-waveform--with-event-subtitle event
+    (let ((obj (car (elt (cadr event) 4))))
+			(when (get-text-property 0 'waveform-pixels-per-second obj)
+				(let* ((x1 (car (elt (elt event 2) 2)))
+							 (x2 (car (elt (elt event 1) 2)))
+							 (msecs
+								(floor (* 1000 (/ (- x1 x2) ; pixels moved
+                                  (get-text-property 0 'waveform-pixels-per-second obj)))))) ; don't save this change
+					(subed-record-set-directive "#+TRIM"
+													(format "%s --> %s"
+																	(subed-msecs-to-timestamp
+																	 (subed-waveform--mouse-event-to-ms event (min x1 x2)))
+																	(subed-msecs-to-timestamp
+																	 (subed-waveform--mouse-event-to-ms event (max x1 x2)))))
+					(subed-waveform-refresh-current-subtitle))))))
 
 (provide 'subed-record)
 
