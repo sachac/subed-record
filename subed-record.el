@@ -1476,6 +1476,85 @@ BEG could be a list of subtitles."
 							 (subed-msecs-to-timestamp start)
 							 (subed-msecs-to-timestamp end))))))
 
+;;; Screenshots and clips
+
+;;;###autoload
+(defun subed-record-save-screenshot ()
+  "Save the MPV screenshot and note the time."
+  (interactive)
+	(subed-record-set-directive
+	 "#+SCREENSHOT"
+	 (subed-mpv-screenshot))
+	(subed-record-set-directive
+	 "#+SCREENSHOT_TIME"
+	 (subed-msecs-to-timestamp subed-mpv-playback-position)))
+
+;;;###autoload
+(defun subed-record-save-screenshot-to-chapter-start ()
+  "Save the MPV screenshot and note the time."
+  (interactive)
+	(save-excursion
+		(re-search-backward "^NOTE")
+		(subed-record-set-directive
+		 "#+SCREENSHOT"
+		 (subed-mpv-screenshot))
+		(subed-record-set-directive
+		 "#+SCREENSHOT_TIME"
+		 (subed-msecs-to-timestamp subed-mpv-playback-position))))
+
+(defvar subed-record-redact-color "0x888888")
+
+;;;###autoload
+(defun subed-record-regenerate-screenshot ()
+  "Generate the screenshot specified by #+SCREENSHOT_TIME and #+SCREENSHOT_CROP.
+Save it to #+SCREENSHOT."
+  (interactive)
+	(when (and (subed-record-get-directive "#+SCREENSHOT_TIME")
+						 (subed-record-get-directive "#+SCREENSHOT"))
+		(compile-media-get-video-frame
+		 (subed-media-file)
+		 (subed-record-get-directive "#+SCREENSHOT_TIME")
+		 (subed-record-get-directive "#+SCREENSHOT")
+		 `(:crop ,(subed-record-get-directive "#+SCREENSHOT_CROP")
+						 :redact ,(subed-record-get-directive "#+SCREENSHOT_REDACT")
+						 :scale  ,(subed-record-get-directive "#+SCREENSHOT_SCALE")
+						 ))))
+
+;;;###autoload
+(defun subed-record-regenerate-clip ()
+  "Generate the clip specifed by #+CLIP."
+  (interactive)
+	(when (and (subed-record-get-directive "#+CLIP_TIME")
+						 (subed-record-get-directive "#+CLIP"))
+		(let* ((clip-time (mapcar (lambda (o)
+																(/ (subed-timestamp-to-msecs o) 1000.0))
+															(split-string (subed-record-get-directive "#+CLIP_TIME") " --> ")))
+					 (args
+						(append
+						 (list
+							"-y"
+							"-ss" (format "%.3f" (car clip-time))
+							"-to" (format "%.3f" (cadr clip-time))
+							"-i" (subed-media-file))
+						 (if (subed-record-get-directive "#+CLIP_REDACT")
+								 (list "-filter_complex"
+											 (concat "[0:v]"
+															 (if (subed-record-get-directive "#+CLIP_FPS")
+																	 (format "fps=%s," (subed-record-get-directive "#+CLIP_FPS"))
+																 "")
+															 (compile-media-format-video-redaction-as-filter
+																(subed-record-get-directive "#+CLIP_REDACT"))
+															 (if (subed-record-get-directive "#+CLIP_SCALE")
+																	 (format ",scale=%s" (subed-record-get-directive "#+CLIP_SCALE"))
+																 ""))
+											 ))
+						 (list (subed-record-get-directive "#+CLIP")))))
+			(with-current-buffer (get-buffer-create "*ffmpeg*")
+				(erase-buffer)
+				(insert "ffmpeg " (mapconcat #'shell-quote-argument args " ") "\n")
+				(kill-new (concat (insert "ffmpeg " (mapconcat #'shell-quote-argument args " ") "\n")))
+				(apply #'start-process "ffmpeg" (current-buffer) "ffmpeg" args)))))
+
 (provide 'subed-record)
 
 ;;; subed-record.el ends here
