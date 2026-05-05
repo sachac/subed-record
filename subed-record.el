@@ -993,6 +993,7 @@ other, and directives will be removed."
 	(interactive)
 	(remove-hook 'subed-mpv-file-loaded-hook #'subed-mpv-pause t)
 	(remove-hook 'subed-mpv-file-loaded-hook #'subed-mpv-jump-to-current-subtitle t)
+	(add-hook 'subed-section-comments-as-chapters-functions #'subed-record-remove-directives t)
 	(setq-local subed-enforce-time-boundaries nil)
 	(add-hook 'subed-media-file-functions #'subed-record-media-file -100 t)
   (add-hook 'subed-mpv-before-jump-hook #'subed-record-ensure-same-file nil t))
@@ -1104,6 +1105,22 @@ PROP should be a string like \"#+REFERENCE\"."
     (unless from-comment
       (subed-set-subtitle-comment comment))
     comment))
+
+(defun subed-record-remove-directives (subtitles)
+	"Remove directives from SUBTITLES.
+Works destructively.
+If SUBTITLES is a string with the comments for a subtitle,
+remove directives from that string."
+	(if (stringp subtitles)
+			(replace-regexp-in-string "^#.?+\\(\n\\|$\\)" "" subtitles)
+		(seq-map
+		 (lambda (cue)
+			 (when (elt cue 4)
+				 (setf (elt cue 4) (replace-regexp-in-string "^#.?+\\(\n\\|$\\)" "" (elt cue 4)))
+				 (when (string= (string-trim (elt cue 4)) "")
+					 (setf (elt cue 4) nil)))
+			 cue)
+		 subtitles)))
 
 (defun subed-record-toggle-skip (&optional beg end)
   "Toggle the skip status of the current subtitle.
