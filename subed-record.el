@@ -1445,6 +1445,37 @@ BEG could be a list of subtitles."
 																	 (subed-waveform--mouse-event-to-ms event (max x1 x2)))))
 					(subed-waveform-refresh-current-subtitle))))))
 
+;;;###autoload
+(defun subed-record-word-data-trim (beg end)
+  "Add a trim directive based on the words in the region."
+  (interactive "r")
+	(save-excursion
+		(let ((start
+					 (progn
+						 (goto-char (min beg end))
+						 (or
+							(get-text-property
+							 (point)
+							 'subed-word-data-start)
+							(when-let* ((match (text-property-search-forward
+																	'subed-word-data-start)))
+								(prop-match-value match)))))
+					(end
+					 (progn
+						 (goto-char (min beg end))
+						 (or
+							(get-text-property
+							 (point)
+							 'subed-word-data-end)
+							(when-let* ((match (text-property-search-backward
+																	'subed-word-data-end)))
+								(prop-match-value match))))))
+			(subed-record-set-directive
+			 "#+TRIM"
+			 (format "%s --> %s"
+							 (subed-msecs-to-timestamp start)
+							 (subed-msecs-to-timestamp end))))))
+
 (provide 'subed-record)
 
 ;;; subed-record.el ends here
