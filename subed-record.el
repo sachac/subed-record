@@ -1148,9 +1148,20 @@ If a region is active, toggle the skip status of the subtitles in the region."
 ;;;###autoload
 (defun subed-record-filter-skips (subtitles)
   "Return SUBTITLES without the skipped ones."
-  (seq-remove (lambda (o)
-                (subed-record-get-directive "#+SKIP" (or (elt o 4) "")))
-              subtitles))
+	(let (skip-span)
+		(seq-remove (lambda (o)
+									(let ((skip (subed-record-get-directive "#+SKIP" (or (elt o 4) ""))))
+										(cond
+										 ((string= skip "</skip>")
+											(setq skip-span nil)
+											nil)
+										 ((string= skip "<skip>")
+											(setq skip-span t)
+											t)
+										 ((string= skip "")
+											t)
+										 (t skip-span))))
+								subtitles)))
 
 (defun subed-record-filter-for-directive (directive subtitles &optional match)
   "Return SUBTITLES that have DIRECTIVE.
