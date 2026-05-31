@@ -1106,6 +1106,7 @@ PROP should be a string like \"#+REFERENCE\"."
       (subed-set-subtitle-comment comment))
     comment))
 
+;;;###autoload
 (defun subed-record-remove-directives (subtitles)
 	"Remove directives from SUBTITLES.
 Works destructively.
