@@ -1495,7 +1495,15 @@ BEG could be a list of subtitles."
   (interactive)
 	(subed-record-set-directive
 	 "#+SCREENSHOT"
-	 (subed-mpv-screenshot))
+	 (subed-mpv-screenshot
+		(concat
+		 (file-name-base (subed-media-file))
+		 "-"
+		 (replace-regexp-in-string
+			"[^0-9]+"
+			"-"
+			(subed-msecs-to-timestamp subed-mpv-playback-position))
+		 ".jpg")))
 	(subed-record-set-directive
 	 "#+SCREENSHOT_TIME"
 	 (subed-msecs-to-timestamp subed-mpv-playback-position)))
@@ -1506,30 +1514,47 @@ BEG could be a list of subtitles."
   (interactive)
 	(save-excursion
 		(re-search-backward "^NOTE")
-		(subed-record-set-directive
-		 "#+SCREENSHOT"
-		 (subed-mpv-screenshot))
-		(subed-record-set-directive
-		 "#+SCREENSHOT_TIME"
-		 (subed-msecs-to-timestamp subed-mpv-playback-position))))
+		(subed-record-save-screenshot)))
 
 (defvar subed-record-redact-color "0x888888")
 
 ;;;###autoload
-(defun subed-record-regenerate-screenshot ()
+(defun subed-record-regenerate-screenshot (&optional skip-directives)
   "Generate the screenshot specified by #+SCREENSHOT_TIME and #+SCREENSHOT_CROP.
-Save it to #+SCREENSHOT."
-  (interactive)
+Save it to #+SCREENSHOT.
+If called with \\[universal-argument], do not crop, redact, or scale."
+  (interactive (list current-prefix-arg))
 	(when (and (subed-record-get-directive "#+SCREENSHOT_TIME")
 						 (subed-record-get-directive "#+SCREENSHOT"))
 		(compile-media-get-video-frame
 		 (subed-media-file)
 		 (subed-record-get-directive "#+SCREENSHOT_TIME")
 		 (subed-record-get-directive "#+SCREENSHOT")
-		 `(:crop ,(subed-record-get-directive "#+SCREENSHOT_CROP")
-						 :redact ,(subed-record-get-directive "#+SCREENSHOT_REDACT")
-						 :scale  ,(subed-record-get-directive "#+SCREENSHOT_SCALE")
-						 ))))
+		 (unless skip-directives
+			 `(:crop ,(subed-record-get-directive "#+SCREENSHOT_CROP")
+							 :redact ,(subed-record-get-directive "#+SCREENSHOT_REDACT")
+							 :scale  ,(subed-record-get-directive "#+SCREENSHOT_SCALE")
+							 )))))
+
+;;;###autoload
+(defun subed-record-regenerate-all-screenshots (&optional beg end skip-directives)
+  "Generate all screenshots."
+  (interactive (if (region-active-p)
+							     (list (region-beginning)
+												 (region-end)
+												 current-prefix-arg)
+							   (list (point-min) (point-max) current-prefix-arg)))
+	(subed-for-each-subtitle (or beg (point-min))
+			(or end (point-max)) nil
+		(when (and (subed-record-get-directive "#+SCREENSHOT_TIME")
+							 (subed-record-get-directive "#+SCREENSHOT"))
+			(subed-record-regenerate-screenshot skip-directives))))
+
+;;;###autoload
+(defun subed-record-open-screenshot-in-other-window ()
+  "Display the screenshot in the other window."
+  (interactive)
+	(find-file-other-window (subed-record-get-directive "#+SCREENSHOT")))
 
 ;;;###autoload
 (defun subed-record-regenerate-clip ()
