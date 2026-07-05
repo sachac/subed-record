@@ -33,6 +33,8 @@
 ;; #+CLOSED_CAPTIONS
 ;; #+OPEN_CAPTIONS
 ;; #+SKIP
+;; #+WIDTH
+;; #+HEIGHT
 ;; #+PAD_RIGHT: number of seconds
 ;; #+PAD_LEFT: number of seconds
 ;; #+TRIM: hh:mm:ss.MMM-hh:mm:ss.MMM,hh:mm:ss.MMM-hh:mm:ss.MMM
@@ -346,17 +348,21 @@ modified list of plists."
 						 subed-record-override-output-filename
 						 subed-record-compile-output-filename)))
 		(mapcar (lambda (info)
-							(if subed-record-override-output-filename
-									(plist-put info :output filename)
-								(let ((val (plist-get info :comment)))
+							(let ((val (plist-get info :comment)))
+								(if subed-record-override-output-filename
+										(plist-put info :output filename)
 									(when val
 										(when (string-match "#\\+OUTPUT: \\(.+?\\)\\(\n\\|$\\)" val)
 											(setq filename (expand-file-name (match-string 1 val)))
 											(setq info (plist-put info :output filename))
 											(setq val (replace-match "" nil t val))
-											(setq info (plist-put info :comment val)))))
-								(unless (plist-get info :output)
-									(plist-put info :output filename)))
+											(setq info (plist-put info :comment val)))
+										(when (string-match "#\\+WIDTH: +\\(.+?\\)\\(\n\\|$\\)" val)
+											(plist-put info :width (string-to-number (match-string 1 val))))
+										(when (string-match "#\\+HEIGHT: +\\(.+?\\)\\(\n\\|$\\)" val)
+											(plist-put info :height (string-to-number (match-string 1 val)))))
+									(unless (plist-get info :output)
+										(plist-put info :output filename))))
 							info)
 						list)))
 
@@ -770,20 +776,26 @@ INCLUDE should be a list of the form (video audio subtitles)."
 										subed-record-sync)))
     (mapc
      (lambda (output-group)
-       (apply
-        (if subed-record-sync #'compile-media-sync #'compile-media)
-        (seq-filter
-         (lambda (track) (member (car track) include))
-         (subed-record-compile--format-tracks (subed-record-compile--interleave (cdr output-group))))
-        (car output-group)
-        (when (and play-afterwards (not subed-record-sync))
-          (list
-           :sentinel
-           (lambda (_ event)
-             (when (string-match "finished" event)
-               (mpv-play (car output-group))
-							 (when (functionp after-func)
-								 (funcall after-func)))))))
+			 (let ((compile-media-output-video-width
+							(or (plist-get (car (cdr output-group)) :width)
+									compile-media-output-video-width))
+						 (compile-media-output-video-height
+							(or (plist-get (car (cdr output-group)) :height)
+									compile-media-output-video-height)))
+				 (apply
+					(if subed-record-sync #'compile-media-sync #'compile-media)
+					(seq-filter
+					 (lambda (track) (member (car track) include))
+					 (subed-record-compile--format-tracks (subed-record-compile--interleave (cdr output-group))))
+					(car output-group)
+					(when (and play-afterwards (not subed-record-sync))
+						(list
+						 :sentinel
+						 (lambda (_ event)
+							 (when (string-match "finished" event)
+								 (mpv-play (car output-group))
+								 (when (functionp after-func)
+									 (funcall after-func))))))))
 			 (when (and subed-record-sync play-afterwards)
 				 (mpv-play (car output-group))))
      output-groups)))
@@ -868,6 +880,14 @@ Compile the video for just that section."
 		(setq result
 					(mapconcat
 					 (lambda (output-group)
+						 (let ((compile-media-output-video-width
+										(if (plist-get :width (car (cdr output-group)))
+												(string-to-number (plist-get :width (car (cdr output-group))))
+											compile-media-output-video-width))
+									 (compile-media-output-video-height
+										(if (plist-get :height (car (cdr output-group)))
+												(string-to-number (plist-get :height (car (cdr output-group))))
+											compile-media-output-video-height))))
 						 (compile-media-get-command
 							(seq-filter
 							 (lambda (track) (member (car track) include))
@@ -1588,7 +1608,7 @@ If called with \\[universal-argument], do not crop, redact, or scale."
 						 (list (subed-record-get-directive "#+CLIP")))))
 			(with-current-buffer (get-buffer-create "*ffmpeg*")
 				(erase-buffer)
-				(insert "ffmpeg " (mapconcat #'shell-quote-argument args " ") "\n")
+				(insert "CMD ffmpeg " (mapconcat #'shell-quote-argument args " ") "\n")
 				(kill-new (concat (insert "ffmpeg " (mapconcat #'shell-quote-argument args " ") "\n")))
 				(apply #'start-process "ffmpeg" (current-buffer) "ffmpeg" args)))))
 
